@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0c0d12" />
+    <meta
+      name="description"
+      content="Dash2Frontier is a two-player online mining race. Dig through one shared seam, sabotage your rival, and breach one of their two gates first."
+    />
+    <title>Dash2Frontier — Two-player mining race</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href="/css/style.css" />
+  </head>
+  <body>
+    <div class="ambient" aria-hidden="true">
+      <div class="ambient-glow ambient-glow-a"></div>
+      <div class="ambient-glow ambient-glow-b"></div>
+      <div class="ambient-grid"></div>
+      <div class="ambient-dust"></div>
+    </div>
+
+    <div id="net-banner" class="net-banner hidden" role="status">
+      <span class="net-dot"></span>
+      <span id="net-banner-text">Connection lost — reconnecting…</span>
+    </div>
+
+    <main id="screen-menu" class="screen screen-menu">
+      <div class="menu-shell">
+        <header class="brand">
+          <p class="eyebrow"><span class="eyebrow-line"></span>Two-player mining race</p>
+          <h1 class="logo" aria-label="Dash2Frontier">
+            <span class="logo-word logo-dash">DASH</span><span class="logo-two">2</span
+            ><span class="logo-word logo-frontier">FRONTIER</span>
+          </h1>
+          <p class="tagline">
+            One seam. Two drills. Cut a route through the rock, sabotage the rival, and
+            breach one of their two gates before the four-minute whistle.
+          </p>
+        </header>
+
+        <div class="menu-grid">
+          <section class="panel briefing-panel" aria-labelledby="briefing-title">
+            <div class="panel-header">
+              <h2 id="briefing-title">Field briefing</h2>
+              <span class="stamp">D2F / 04:00</span>
+            </div>
+            <ol class="briefing">
+              <li>
+                <span class="step-no">01</span>
+                <div>
+                  <strong>Two miners, one map.</strong>
+                  You start on opposite sides of the same block-filled seam.
+                </div>
+              </li>
+              <li>
+                <span class="step-no">02</span>
+                <div>
+                  <strong>Move continuously with WASD or arrows.</strong>
+                  The block you face is drilled automatically. Let go and the drill keeps
+                  working; turn away to switch targets or walk off mid-dig. Bedrock cannot
+                  be broken, so plan a detour.
+                </div>
+              </li>
+              <li>
+                <span class="step-no">03</span>
+                <div>
+                  <strong>Aim skills with the mouse.</strong>
+                  Drag barricades around the rival, blast a 3×3 hole, or drop a delayed
+                  frost burst. Overdrive is instant. Empty tunnel is a free walk.
+                </div>
+              </li>
+              <li>
+                <span class="step-no">04</span>
+                <div>
+                  <strong>Breach an upper or lower gate.</strong>
+                  Only the two glowing stretches at the top and bottom of the rival
+                  baseline score. The middle is sealed and the spawn area is not a target.
+                  If the clock hits zero, the miner nearest a gate takes it.
+                </div>
+              </li>
+            </ol>
+            <div class="loadout-preview" aria-label="Skills">
+              <div class="loadout-chip">
+                <kbd>Q</kbd><span>Build</span>
+              </div>
+              <div class="loadout-chip">
+                <kbd>E</kbd><span>Blast</span>
+              </div>
+              <div class="loadout-chip">
+                <kbd>R</kbd><span>Overdrive</span>
+              </div>
+              <div class="loadout-chip">
+                <kbd>F</kbd><span>Cryo</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel access-panel" aria-labelledby="access-title">
+            <div class="panel-header">
+              <h2 id="access-title">Mine access</h2>
+              <span id="connection-status" class="status-chip">Online</span>
+            </div>
+
+            <label class="field">
+              <span class="field-label">Call sign</span>
+              <input
+                id="name-input"
+                type="text"
+                maxlength="16"
+                placeholder="MINER"
+                autocomplete="nickname"
+                spellcheck="false"
+              />
+            </label>
+
+            <button id="create-btn" class="btn btn-primary" type="button">
+              <span>Create room</span>
+              <span class="btn-arrow" aria-hidden="true">→</span>
+            </button>
+
+            <div class="or-line"><span>or join an existing shaft</span></div>
+
+            <div class="join-row">
+              <label class="field code-field">
+                <span class="field-label">Room code · 5 digits</span>
+                <input
+                  id="code-input"
+                  type="text"
+                  maxlength="5"
+                  placeholder="00000"
+                  inputmode="numeric"
+                  pattern="[0-9]*"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                />
+              </label>
+              <button id="join-btn" class="btn btn-secondary" type="button">Join</button>
+            </div>
+
+            <p id="menu-message" class="form-message" role="alert"></p>
+
+            <div class="access-foot">
+              <span class="status-dot"></span>
+              Numeric room-code multiplayer · both players need this page open
+            </div>
+          </section>
+        </div>
+
+        <footer class="menu-footer">
+          <span>Recommended: desktop browser, mouse and sound on.</span>
+          <span class="menu-footer-rule"></span>
+          <span>Tip: the middle of each baseline is sealed. Aim for a gate.</span>
+        </footer>
+      </div>
+    </main>
+
+    <main id="screen-lobby" class="screen screen-lobby hidden">
+      <div class="lobby-shell">
+        <header class="lobby-header">
+          <p class="eyebrow"><span class="eyebrow-line"></span>Shaft linked</p>
+          <h2>Waiting for your rival</h2>
+          <p>Share the 5-digit room code. The countdown starts automatically when both miners are in.</p>
+        </header>
+
+        <div class="room-ticket">
+          <div class="ticket-stub">D2F</div>
+          <div class="ticket-body">
+            <span class="ticket-label">Room code · 5 digits</span>
+            <div id="room-code" class="room-code">00000</div>
+            <button id="copy-code" class="btn btn-ghost btn-small" type="button">
+              Copy code
+            </button>
+          </div>
+          <div class="ticket-barcode" aria-hidden="true"></div>
+        </div>
+
+        <div class="versus" aria-label="Players">
+          <article id="slot-0" class="player-slot">
+            <span class="slot-tag">Miner 01</span>
+            <div class="slot-avatar slot-avatar-one" aria-hidden="true"></div>
+            <strong class="slot-name">Waiting…</strong>
+            <span class="slot-status">Empty seat</span>
+          </article>
+          <div class="versus-mark" aria-hidden="true"><span>VS</span></div>
+          <article id="slot-1" class="player-slot">
+            <span class="slot-tag">Miner 02</span>
+            <div class="slot-avatar slot-avatar-two" aria-hidden="true"></div>
+            <strong class="slot-name">Waiting…</strong>
+            <span class="slot-status">Empty seat</span>
+          </article>
+        </div>
+
+        <div class="lobby-meter" aria-hidden="true">
+          <span class="lobby-meter-bar"></span>
+        </div>
+        <p id="lobby-message" class="lobby-message" role="status">
+          Awaiting a second miner…
+        </p>
+
+        <button id="leave-lobby" class="btn btn-ghost" type="button">Leave room</button>
+      </div>
+    </main>
+
+    <main id="screen-game" class="screen screen-game hidden">
+      <header class="hud" aria-label="Match status">
+        <section id="player-card-0" class="player-card player-card-one">
+          <div class="player-card-top">
+            <span class="player-color-flag"></span>
+            <span class="player-card-name">MINER 01</span>
+            <span class="you-tag">You</span>
+          </div>
+          <div class="player-card-meters">
+            <div class="meter-row">
+              <span class="meter-label">Progress</span>
+              <span class="meter-value" data-progress>0%</span>
+            </div>
+            <div class="meter progress-meter"><span data-progress-fill></span></div>
+            <div class="meter-row energy-row">
+              <span class="meter-label">Energy</span>
+              <span class="meter-value" data-energy>0</span>
+            </div>
+            <div class="meter energy-meter"><span data-energy-fill></span></div>
+          </div>
+          <div class="buff-row" data-buffs></div>
+        </section>
+
+        <section class="hud-center">
+          <p class="hud-kicker">Breach an upper or lower gate</p>
+          <div id="timer" class="timer" role="timer" aria-live="off">04:00</div>
+          <div class="race-track" aria-hidden="true">
+            <div class="race-base race-base-left">P1</div>
+            <div class="race-line">
+              <span class="race-fill race-fill-one"></span>
+              <span class="race-fill race-fill-two"></span>
+              <span id="race-marker-0" class="race-marker race-marker-one">◀</span>
+              <span id="race-marker-1" class="race-marker race-marker-two">▶</span>
+            </div>
+            <div class="race-base race-base-right">P2</div>
+          </div>
+          <div id="status-line" class="status-line" role="status">READY THE DRILLS</div>
+        </section>
+
+        <section id="player-card-1" class="player-card player-card-two">
+          <div class="player-card-top">
+            <span class="player-color-flag"></span>
+            <span class="player-card-name">MINER 02</span>
+            <span class="you-tag">You</span>
+          </div>
+          <div class="player-card-meters">
+            <div class="meter-row">
+              <span class="meter-label">Progress</span>
+              <span class="meter-value" data-progress>0%</span>
+            </div>
+            <div class="meter progress-meter"><span data-progress-fill></span></div>
+            <div class="meter-row energy-row">
+              <span class="meter-label">Energy</span>
+              <span class="meter-value" data-energy>0</span>
+            </div>
+            <div class="meter energy-meter"><span data-energy-fill></span></div>
+          </div>
+          <div class="buff-row" data-buffs></div>
+        </section>
+
+      </header>
+
+      <div id="stage" class="stage">
+        <div class="stage-frame" aria-hidden="true"></div>
+        <canvas id="game-canvas" aria-label="Mining race map"></canvas>
+        <button id="mute-btn" class="icon-btn mute-btn" type="button" aria-label="Mute sound">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 9v6h4l5 4V5L8 9H4Z" />
+            <path class="sound-wave" d="M16 8.5a5 5 0 0 1 0 7" />
+            <path class="sound-wave" d="M18.5 6a8.5 8.5 0 0 1 0 12" />
+          </svg>
+        </button>
+        <div id="countdown" class="countdown hidden" aria-hidden="true">3</div>
+        <div id="offline-banner" class="offline-banner hidden" role="status">
+          Rival offline — waiting for connection
+        </div>
+        <div id="toasts" class="toasts" aria-live="polite"></div>
+        <div class="stage-caption" aria-hidden="true">
+          <span id="seam-size">SHARED SEAM / 72 × 28</span>
+          <span>UPPER + LOWER GATES · DIG · SABOTAGE</span>
+        </div>
+      </div>
+
+      <footer class="skill-deck">
+        <div class="movement-help">
+          <span class="movement-keys"><kbd>W</kbd><span><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span></span>
+          <span><strong>Move continuously</strong>Arrow keys work too. Release — the drill keeps going on the face you touch. Turn to switch.</span>
+        </div>
+        <div id="skills" class="skills" aria-label="Skills"></div>
+        <div class="deck-note">
+          <span class="deck-note-label">Field note</span>
+          <span>Q/E/F arm a mouse target. Right-click or Esc cancels. R is instant.</span>
+        </div>
+      </footer>
+
+      <div id="result-overlay" class="result-overlay hidden" role="dialog" aria-modal="true">
+        <div class="result-card">
+          <p id="result-kicker" class="eyebrow">Match over</p>
+          <h2 id="result-title" class="result-title">Victory</h2>
+          <p id="result-subtitle" class="result-subtitle"></p>
+          <div id="result-stats" class="result-stats"></div>
+          <div class="result-actions">
+            <button id="rematch-btn" class="btn btn-primary" type="button">Rematch</button>
+            <button id="leave-result" class="btn btn-ghost" type="button">Leave room</button>
+          </div>
+          <p id="rematch-note" class="rematch-note" role="status"></p>
+        </div>
+      </div>
+    </main>
+
+    <div id="screen-flash" class="screen-flash" aria-hidden="true"></div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script type="module" src="/js/main.js"></script>
+  </body>
+</html>
