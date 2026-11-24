@@ -102,6 +102,10 @@ const examOverlay = $('exam-overlay');
 const examTimerEl = $('exam-timer');
 const examQuestionsEl = $('exam-questions');
 const examSubmitBtn = $('exam-submit');
+const devSidebar = $('dev-sidebar');
+const devCloseBtn = $('dev-close');
+const devEffectsEl = $('dev-effects');
+const devTargetBtns = Array.from(document.querySelectorAll('.dev-target'));
 
 const resultOverlay = $('result-overlay');
 const resultKicker = $('result-kicker');
@@ -168,6 +172,9 @@ const state = {
   lockdownActive: false,
   examId: null,
   examAnswers: [],
+  devOpen: false,
+  devTarget: 'self',
+  devPresses: [],
   targeting: null,
   targetingHover: null,
   targetingCells: [],
@@ -356,6 +363,81 @@ async function requestCheat(enabled) {
   const result = await emitAck('game:cheat', { enabled }, 2500);
   if (!result.ok) {
     addToast(result.message || 'Cheat mode failed.', 'danger', 2200);
+  }
+}
+
+/* ── Developer menu (triple-tap ]) ──────────────────────────────────── */
+
+const DEV_TRIPLE_WINDOW_MS = 700;
+const DEV_GROUPS = [
+  ['buff', 'Buffs'],
+  ['debuff', 'Debuffs'],
+  ['tradeoff', 'Tradeoffs'],
+];
+
+function setDevMenu(open) {
+  state.devOpen = Boolean(open);
+  if (devSidebar) devSidebar.classList.toggle('hidden', !state.devOpen);
+}
+
+function handleDevKey() {
+  if (state.screen !== 'game') return;
+  const now = performance.now();
+  state.devPresses = state.devPresses.filter((at) => now - at <= DEV_TRIPLE_WINDOW_MS);
+  state.devPresses.push(now);
+  if (state.devPresses.length >= 3) {
+    state.devPresses = [];
+    setDevMenu(!state.devOpen);
+    audio.click();
+  }
+}
+
+function buildDevMenu() {
+  if (!devEffectsEl) return;
+  devEffectsEl.replaceChildren();
+  for (const [kind, label] of DEV_GROUPS) {
+    const heading = document.createElement('p');
+    heading.className = 'dev-group-label';
+    heading.textContent = label;
+    devEffectsEl.append(heading);
+    for (const def of Object.values(EFFECTS)) {
+      if (def.kind !== kind) continue;
+      const row = document.createElement('div');
+      row.className = `dev-effect is-${kind}`;
+      const icon = document.createElement('span');
+      icon.className = 'dev-effect-icon';
+      icon.textContent = def.icon;
+      const body = document.createElement('div');
+      const name = document.createElement('span');
+      name.className = 'dev-effect-name';
+      name.textContent = def.name;
+      const description = document.createElement('p');
+      description.className = 'dev-effect-desc';
+      description.textContent = def.description || '';
+      body.append(name, description);
+      const trigger = document.createElement('button');
+      trigger.type = 'button';
+      trigger.className = 'dev-trigger';
+      trigger.textContent = 'Trigger';
+      trigger.addEventListener('click', () => triggerDevEffect(def.id));
+      row.append(icon, body, trigger);
+      devEffectsEl.append(row);
+    }
+  }
+}
+
+async function triggerDevEffect(effectId) {
+  if (!state.connected || !socket) {
+    addToast('Not connected.', 'danger', 1800);
+    return;
+  }
+  const result = await emitAck(
+    'dev:effect',
+    { effect: effectId, target: state.devTarget },
+    3000,
+  );
+  if (!result.ok) {
+    addToast(result.message || 'Could not apply that effect.', 'danger', 2200);
   }
 }
 
@@ -831,6 +913,8 @@ function resetGameView() {
   state.cheatPresses = [];
   state.hijackActive = false;
   state.lockdownActive = false;
+  state.devPresses = [];
+  setDevMenu(false);
   hideExam();
   updateCheatBadge();
   state.wasCountdown = false;
@@ -1090,6 +1174,8 @@ function onGameInit(payload) {
   state.cheatPresses = [];
   state.hijackActive = false;
   state.lockdownActive = false;
+  state.devPresses = [];
+  setDevMenu(false);
   hideExam();
   updateSessionIdentity();
 
@@ -1808,16 +1894,30 @@ function onKeyDown(event) {
   if (isTypingTarget(event.target)) return;
   if (state.screen !== 'game') return;
 
-  if (event.code === 'Escape' && state.targeting) {
-    event.preventDefault();
-    cancelTargeting();
-    return;
+  if (event.code === 'Escape') {
+    if (state.devOpen) {
+      event.preventDefault();
+      setDevMenu(false);
+      return;
+    }
+    if (state.targeting) {
+      event.preventDefault();
+      cancelTargeting();
+      return;
+    }
   }
 
   if (event.code === 'KeyC') {
     event.preventDefault();
     if (event.repeat) return;
     handleCheatKey();
+    return;
+  }
+
+  if (event.code === 'BracketRight') {
+    event.preventDefault();
+    if (event.repeat) return;
+    handleDevKey();
     return;
   }
 
@@ -1923,6 +2023,16 @@ function initUi() {
   buildSkillCards();
   setupMuteButton();
   setupStatusTooltip();
+  buildDevMenu();
+  for (const button of devTargetBtns) {
+    button.addEventListener('click', () => {
+      state.devTarget = button.dataset.target === 'rival' ? 'rival' : 'self';
+      for (const node of devTargetBtns) {
+        node.classList.toggle('is-active', node === button);
+      }
+    });
+  }
+  if (devCloseBtn) devCloseBtn.addEventListener('click', () => setDevMenu(false));
   updateConnectionStatus();
   updateHudEmpty();
   if (seamSizeEl) seamSizeEl.textContent = `SHARED SEAM / ${CONFIG.cols} × ${CONFIG.rows}`;

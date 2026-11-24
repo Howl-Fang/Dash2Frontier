@@ -325,6 +325,19 @@
       </div>
 
       <div id="status-tip" class="status-tip hidden" role="tooltip"></div>
+
+      <aside id="dev-sidebar" class="dev-sidebar hidden" aria-label="Developer effects">
+        <header class="dev-head">
+          <span class="eyebrow">Developer menu</span>
+          <button id="dev-close" class="dev-close" type="button" aria-label="Close developer menu">×</button>
+        </header>
+        <p class="dev-hint">Pick a target, then trigger a status. Triple-tap ] to toggle this panel.</p>
+        <div class="dev-targets" role="group" aria-label="Effect target">
+          <button class="dev-target is-active" data-target="self" type="button">Self</button>
+          <button class="dev-target" data-target="rival" type="button">Rival</button>
+        </div>
+        <div id="dev-effects" class="dev-effects"></div>
+      </aside>
     </main>
 
     <div id="screen-flash" class="screen-flash" aria-hidden="true"></div>

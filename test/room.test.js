@@ -271,3 +271,85 @@ test('a client can toggle cheat mode and freeze the rival', async () => {
     await closeServer(server, sockets);
   }
 });
+
+test('developer effects reach the selected target over the socket', async () => {
+  const server = createGameServer({ config: fastConfig({ matchSeconds: 15 }) });
+  const port = await server.listen(0);
+  const sockets = [];
+  try {
+    const host = await connectClient(port);
+    const guest = await connectClient(port);
+    sockets.push(host, guest);
+
+    const created = await ackFor(host, 'room:create', { name: 'Ada' });
+    const hostPlaying = waitFor(
+      host,
+      'game:snapshot',
+      (snapshot) => snapshot.phase === 'playing',
+      4000,
+    );
+    await ackFor(guest, 'room:join', { code: created.code, name: 'Bo' });
+    await hostPlaying;
+
+    const fogged = await ackFor(host, 'dev:effect', { effect: 'fog', target: 'rival' });
+    assert.equal(fogged.ok, true);
+    const fogSnapshot = await waitFor(
+      host,
+      'game:snapshot',
+      (snapshot) => (snapshot.players?.[1]?.buffs?.fog ?? 0) > 0,
+      3000,
+    );
+    assert.ok(fogSnapshot.players[1].buffs.fog > 0);
+
+    const exam = await ackFor(host, 'dev:effect', { effect: 'exam', target: 'self' });
+    assert.equal(exam.ok, true);
+    const examSnapshot = await waitFor(
+      host,
+      'game:snapshot',
+      (snapshot) => Boolean(snapshot.players?.[0]?.exam?.questions?.length),
+      3000,
+    );
+    assert.equal(examSnapshot.players[0].exam.questions.length, 3);
+    assert.equal(examSnapshot.players[0].exam.questions[0].options.length, 4);
+  } finally {
+    await closeServer(server, sockets);
+  }
+});
+
+test('a frozen player can mash direction keys to thaw', async () => {
+  const server = createGameServer({ config: fastConfig({ matchSeconds: 15 }) });
+  const port = await server.listen(0);
+  const sockets = [];
+  try {
+    const host = await connectClient(port);
+    const guest = await connectClient(port);
+    sockets.push(host, guest);
+
+    const created = await ackFor(host, 'room:create', { name: 'Ada' });
+    const hostPlaying = waitFor(
+      host,
+      'game:snapshot',
+      (snapshot) => snapshot.phase === 'playing',
+      4000,
+    );
+    await ackFor(guest, 'room:join', { code: created.code, name: 'Bo' });
+    await hostPlaying;
+
+    const frozen = await ackFor(host, 'dev:effect', { effect: 'freeze', target: 'rival' });
+    assert.equal(frozen.ok, true);
+    await waitFor(
+      host,
+      'game:snapshot',
+      (snapshot) => Boolean(snapshot.players?.[1]?.thaw),
+      3000,
+    );
+
+    let thawed = null;
+    for (let i = 0; i < 8; i += 1) {
+      thawed = await ackFor(guest, 'game:thaw', {});
+    }
+    assert.equal(thawed.thawed, true);
+  } finally {
+    await closeServer(server, sockets);
+  }
+});
