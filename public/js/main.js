@@ -104,7 +104,6 @@ const devCloseBtn = $('dev-close');
 const devEffectsEl = $('dev-effects');
 const devTargetBtns = Array.from(document.querySelectorAll('.dev-target'));
 
-const lockdownBadgeEl = $('lockdown-badge');
 const resultOverlay = $('result-overlay');
 const resultKicker = $('result-kicker');
 const resultTitle = $('result-title');
@@ -125,8 +124,6 @@ const playerCards = [0, 1].map((index) => {
   return {
     root,
     name: root.querySelector('.player-card-name'),
-    progress: root.querySelector('[data-progress]'),
-    progressFill: root.querySelector('[data-progress-fill]'),
     energy: root.querySelector('[data-energy]'),
     energyFill: root.querySelector('[data-energy-fill]'),
     buffs: root.querySelector('[data-buffs]'),
@@ -167,7 +164,6 @@ const state = {
   cheat: false,
   cheatPresses: [],
   hijackActive: false,
-  lockdownActive: false,
   examId: null,
   examAnswers: [],
   examData: null,
@@ -594,7 +590,9 @@ function isBuildCellValid(col, row) {
   const players = state.snapshot?.players;
   if (!players) return false;
   if (isGoalTriggerTarget(col, row)) return false;
-  if (mapCellAt(col, row) !== BLOCK.EMPTY) return false;
+  const block = mapCellAt(col, row);
+  // Build overwrites diggable rock; only bedrock refuses the barricade.
+  if (block === null || block === BLOCK.BEDROCK) return false;
   const me = players[state.you];
   const opponent = players[1 - state.you];
   if (!opponent) return false;
@@ -607,9 +605,11 @@ function isBuildCellValid(col, row) {
 
 function blastBreakableCells(col, row) {
   const cells = [];
-  const radius = SKILLS.blast.radius;
+  const me = state.snapshot?.players?.[state.you];
+  const radius = me?.apotheosis > 0 ? SKILLS.blast.megaRadius : SKILLS.blast.radius;
   for (let dc = -radius; dc <= radius; dc += 1) {
     for (let dr = -radius; dr <= radius; dr += 1) {
+      if (radius > SKILLS.blast.radius && Math.hypot(dc, dr) > radius + 0.35) continue;
       const block = mapCellAt(col + dc, row + dr);
       if (block === null) continue;
       if (block !== BLOCK.EMPTY && block !== BLOCK.BEDROCK) {
@@ -912,7 +912,6 @@ function resetGameView() {
   state.cheat = false;
   state.cheatPresses = [];
   state.hijackActive = false;
-  state.lockdownActive = false;
   state.devPresses = [];
   state.examData = null;
   setDevMenu(false);
@@ -1175,7 +1174,6 @@ function onGameInit(payload) {
   state.cheat = false;
   state.cheatPresses = [];
   state.hijackActive = false;
-  state.lockdownActive = false;
   state.devPresses = [];
   state.examData = null;
   setDevMenu(false);
@@ -1223,9 +1221,6 @@ function onSnapshot(snapshot) {
     syncDirection(true);
   }
   state.hijackActive = hijacked;
-  const locked = (snapshot.lockdownMs ?? 0) > 0;
-  if (state.lockdownActive && !locked) addFieldLog('GATES REOPENED', 'buff');
-  state.lockdownActive = locked;
   if (snapshot.phase === 'finished') {
     flushInput();
     cancelTargeting();
@@ -1298,9 +1293,7 @@ function onFx(payload) {
         } else {
           audio.lucky(event.kind === 'buff');
           notifyPlayer(target, label, tone);
-          if (event.effect === 'lockdown') {
-            addFieldLog('GATES SEALED — LOCKDOWN 8S', 'debuff');
-          } else if (event.effect === 'exam') {
+          if (event.effect === 'exam') {
             addFieldLog('EXAM STARTED — 3 SUMS IN 10S', 'tradeoff');
           }
         }
@@ -1362,24 +1355,33 @@ function handleSkillFx(event) {
   renderer.addSkillEffect(event);
   audio.skill(event.skill, own);
   if (event.skill === 'blast' && own) flashScreen();
+  const empowered = Boolean(event.empowered);
 
   if (event.skill === 'build') {
     const count = event.cells?.length || 0;
+    const label = empowered ? 'MEGABUILD' : 'BUILD';
     notifyPlayer(
       event.player,
-      own ? `BUILD ×${count}` : `RIVAL WALL ×${count}`,
+      own ? `${label} ×${count}` : `RIVAL ${label} ×${count}`,
       own ? 'cyan' : 'debuff',
     );
   } else if (event.skill === 'blast') {
+    const label = empowered ? 'GIGABLAST' : 'BLAST';
     notifyPlayer(
       event.player,
-      own ? `BLAST ×${event.cells?.length || 0}` : 'RIVAL BLAST',
+      own ? `${label} ×${event.cells?.length || 0}` : `RIVAL ${label}`,
       own ? 'cyan' : 'debuff',
     );
   } else if (event.skill === 'overdrive') {
-    notifyPlayer(event.player, own ? 'OVERDRIVE' : 'RIVAL OVERDRIVE', own ? 'buff' : 'debuff');
+    const label = empowered ? 'HYPERDRIVE' : 'OVERDRIVE';
+    notifyPlayer(event.player, own ? label : `RIVAL ${label}`, own ? 'buff' : 'debuff');
   } else if (event.skill === 'cryo') {
-    notifyPlayer(event.player, own ? 'CRYO ARMED' : 'RIVAL CRYO', own ? 'cyan' : 'debuff');
+    const label = event.frostbite ? 'FROSTBITE' : 'CRYO';
+    notifyPlayer(
+      event.player,
+      own ? (event.frostbite ? 'FROSTBITE' : 'CRYO ARMED') : `RIVAL ${label}`,
+      own ? 'cyan' : 'debuff',
+    );
   }
 }
 
@@ -1408,8 +1410,6 @@ function applyPlayerNames() {
 function updateHudEmpty() {
   for (let index = 0; index < 2; index += 1) {
     const card = playerCards[index];
-    card.progress.textContent = '0%';
-    card.progressFill.style.width = '0%';
     card.energy.textContent = '0';
     card.energyFill.style.width = '0%';
     card.buffs.replaceChildren();
@@ -1425,11 +1425,11 @@ function updateHudEmpty() {
   timerEl.classList.remove('is-urgent');
   statusLine.textContent = 'READY THE DRILLS';
   countdownEl.classList.add('hidden');
-  if (lockdownBadgeEl) lockdownBadgeEl.classList.add('hidden');
 }
 
 const STATUS_CHIP_ORDER = [
   'overdrive',
+  'hyper',
   'cryo',
   'echo',
   'invert',
@@ -1445,6 +1445,7 @@ const STATUS_CHIP_ORDER = [
   'examFail',
   'freeze',
   'luck',
+  'apotheosis',
   'exam',
 ];
 
@@ -1454,6 +1455,10 @@ function statusEntries(player) {
   for (const id of STATUS_CHIP_ORDER) {
     if (id === 'luck') {
       if (player.luckCharges > 0) entries.push({ id, value: `×${player.luckCharges}` });
+      continue;
+    }
+    if (id === 'apotheosis') {
+      if (player.apotheosis > 0) entries.push({ id, value: 'READY' });
       continue;
     }
     if (id === 'exam') {
@@ -1466,7 +1471,7 @@ function statusEntries(player) {
     if (remaining <= 0) continue;
     let value = `${remaining.toFixed(1)}s`;
     if (id === 'qte' && player.thaw) {
-      value = `${remaining.toFixed(1)}s · ${player.thaw.taps}/${player.thaw.needed}`;
+      value = `${Math.round((player.thaw.progress || 0) * 100)}%`;
     }
     entries.push({ id, value });
   }
@@ -1479,13 +1484,12 @@ function createStatusChip(entry) {
   const chip = document.createElement('span');
   chip.className = `buff-chip is-${def.kind}`;
   chip.dataset.tip = description ? `${def.name} — ${description}` : def.name;
-  chip.title = chip.dataset.tip;
   const icon = document.createElement('span');
   icon.className = 'chip-icon';
   icon.innerHTML = effectIconSvg(entry.id, 'chip-glyph');
   const name = document.createElement('span');
   name.className = 'chip-name';
-  name.textContent = def.name;
+  name.textContent = def.short || def.name;
   const value = document.createElement('span');
   value.className = 'chip-value';
   value.textContent = entry.value;
@@ -1524,27 +1528,52 @@ function updateStatusChips(index, player) {
 
 function setupStatusTooltip() {
   if (!statusTipEl) return;
-  const hide = () => statusTipEl.classList.add('hidden');
-  document.addEventListener('pointerover', (event) => {
-    const target = event.target instanceof Element ? event.target : null;
-    const chip = target?.closest('.buff-chip[data-tip]');
-    if (!chip) return;
+  let activeChip = null;
+  let pointerX = 0;
+  let pointerY = 0;
+  let tipW = 0;
+  let tipH = 0;
+  let frame = 0;
+
+  const place = () => {
+    frame = 0;
+    if (!activeChip) return;
+    const x = Math.max(10, Math.min(window.innerWidth - tipW - 10, pointerX + 16));
+    const y = Math.max(10, Math.min(window.innerHeight - tipH - 10, pointerY + 18));
+    statusTipEl.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+  };
+
+  const show = (chip) => {
+    activeChip = chip;
     statusTipEl.textContent = chip.dataset.tip || '';
     statusTipEl.classList.remove('hidden');
+    // Measure once per chip so following the cursor never forces layout.
     const rect = statusTipEl.getBoundingClientRect();
-    const x = Math.min(window.innerWidth - rect.width - 10, event.clientX + 14);
-    const y = Math.min(window.innerHeight - rect.height - 10, event.clientY + 14);
-    statusTipEl.style.left = `${Math.max(10, x)}px`;
-    statusTipEl.style.top = `${Math.max(10, y)}px`;
-  });
-  document.addEventListener('pointerout', (event) => {
+    tipW = rect.width;
+    tipH = rect.height;
+    if (!frame) frame = requestAnimationFrame(place);
+  };
+
+  const hide = () => {
+    activeChip = null;
+    statusTipEl.classList.add('hidden');
+  };
+
+  document.addEventListener('pointermove', (event) => {
     const target = event.target instanceof Element ? event.target : null;
-    const chip = target?.closest('.buff-chip[data-tip]');
-    if (!chip) return;
-    if (event.relatedTarget instanceof Node && chip.contains(event.relatedTarget)) return;
-    hide();
+    const chip = target?.closest('.buff-chip[data-tip]') || null;
+    pointerX = event.clientX;
+    pointerY = event.clientY;
+    if (!chip) {
+      if (activeChip) hide();
+      return;
+    }
+    if (chip !== activeChip) show(chip);
+    else if (!frame) frame = requestAnimationFrame(place);
   });
+  document.addEventListener('pointerdown', hide);
   window.addEventListener('blur', hide);
+  window.addEventListener('scroll', hide, true);
 }
 
 function updateExamSubmitState() {
@@ -1645,9 +1674,6 @@ function updateHud(snapshot) {
     card.name.textContent = player.name || `MINER 0${index + 1}`;
     card.root.classList.toggle('is-you', index === state.you);
     card.root.classList.toggle('is-offline', player.connected === false);
-    const progress = Math.round(Math.max(0, Math.min(1, player.progress || 0)) * 100);
-    card.progress.textContent = `${progress}%`;
-    card.progressFill.style.width = `${progress}%`;
     card.energy.textContent = String(Math.round(player.energy || 0));
     card.energyFill.style.width = `${Math.min(
       100,
@@ -1671,24 +1697,17 @@ function updateHud(snapshot) {
     snapshot.phase === 'playing' && snapshot.timeLeftMs <= 10_000,
   );
 
-  const lockdownMs = snapshot.lockdownMs || 0;
-  if (lockdownBadgeEl) {
-    lockdownBadgeEl.classList.toggle('hidden', lockdownMs <= 0);
-    if (lockdownMs > 0) {
-      lockdownBadgeEl.textContent = `GATES SEALED · ${(lockdownMs / 1000).toFixed(1)}s`;
-    }
-  }
-
   updateStatusLine(snapshot);
   updateOfflineBanner();
 }
 
 function updateStatusLine(snapshot) {
   if (state.targeting) {
+    const apo = (state.snapshot?.players?.[state.you]?.apotheosis ?? 0) > 0;
     if (state.targeting === 'build') {
-      statusLine.textContent = `BUILD · DRAG UP TO ${SKILLS.build.maxCells} CELLS NEAR THE RIVAL · RIGHT-CLICK / ESC CANCELS`;
+      statusLine.textContent = `BUILD${apo ? ' · MEGA 3×1' : ''} · DRAG UP TO ${SKILLS.build.maxCells} CELLS NEAR THE RIVAL · RIGHT-CLICK / ESC CANCELS`;
     } else if (state.targeting === 'blast') {
-      statusLine.textContent = 'BLAST · CLICK A 3×3 AREA WITHIN 10 CELLS · RIGHT-CLICK / ESC CANCELS';
+      statusLine.textContent = `BLAST · CLICK A ${apo ? '7×7 CIRCLE' : '3×3 AREA'} WITHIN 10 CELLS · RIGHT-CLICK / ESC CANCELS`;
     } else if (state.targeting === 'cryo') {
       statusLine.textContent = 'CRYO · CLICK NEAR THE RIVAL FOR A DELAYED BURST · RIGHT-CLICK / ESC CANCELS';
     }
@@ -1703,7 +1722,7 @@ function updateStatusLine(snapshot) {
   } else if (snapshot.phase === 'finished') {
     statusLine.textContent = 'MATCH OVER';
   } else if (me?.buffs?.qte > 0) {
-    statusLine.textContent = `FROZEN — MASH DIRECTION KEYS ${me.thaw?.taps ?? 0}/${me.thaw?.needed ?? 8}`;
+    statusLine.textContent = `FROZEN — MASH WASD · THAW ${Math.round((me.thaw?.progress ?? 0) * 100)}%`;
   } else if (me?.buffs?.freeze > 0) {
     statusLine.textContent = 'FROZEN IN PLACE — CANNOT MOVE OR DRILL';
   } else if (me?.buffs?.hijack > 0) {

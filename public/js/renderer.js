@@ -90,6 +90,8 @@ export class GameRenderer {
     this.rings = [];
     this.playerTexts = [[], []];
     this.shake = 0;
+    this.fogActive = false;
+    this.fogBlend = 0;
     this.time = 0;
     this.lastFrame = 0;
     this.running = false;
@@ -127,6 +129,8 @@ export class GameRenderer {
     this.rings = [];
     this.playerTexts = [[], []];
     this.shake = 0;
+    this.fogActive = false;
+    this.fogBlend = 0;
     this.barricadeCells.clear();
     this.luckyCells.clear();
     for (let i = 0; i < this.cells.length; i += 1) {
@@ -397,6 +401,17 @@ export class GameRenderer {
         ctx.moveTo(bx + bw * 0.3, by + bh * 0.85);
         ctx.lineTo(bx + bw * 0.72, by + bh * 0.25);
         ctx.stroke();
+      } else if (block === BLOCK.ICE) {
+        ctx.fillStyle = 'rgba(210, 248, 255, 0.22)';
+        ctx.fillRect(bx + bw * 0.12, by + bh * 0.18, Math.max(1, bw * 0.3), Math.max(1, bh * 0.08));
+        ctx.fillRect(bx + bw * 0.5, by + bh * 0.55, Math.max(1, bw * 0.34), Math.max(1, bh * 0.07));
+        ctx.strokeStyle = 'rgba(220, 250, 255, 0.5)';
+        ctx.lineWidth = Math.max(1, tile * 0.03);
+        ctx.beginPath();
+        ctx.moveTo(bx + bw * 0.2, by + bh * 0.8);
+        ctx.lineTo(bx + bw * 0.45, by + bh * 0.35);
+        ctx.lineTo(bx + bw * 0.72, by + bh * 0.6);
+        ctx.stroke();
       } else if (block === BLOCK.BEDROCK) {
         ctx.strokeStyle = 'rgba(120, 124, 140, 0.55)';
         ctx.lineWidth = Math.max(1, tile * 0.055);
@@ -526,7 +541,13 @@ export class GameRenderer {
       }
       this.addShake(1.4);
     } else if (event.skill === 'cryo') {
-      if (event.target) {
+      if (event.frostbite) {
+        for (const cell of event.cells || []) {
+          this.addRing(cell.col + 0.5, cell.row + 0.5, tile * 0.15, tile * 0.55, '#c9f3ff', 0.45);
+          this.addSparks(cell.col + 0.5, cell.row + 0.5, '#d8f8ff', 4, 2.2);
+        }
+        this.addShake(4.5);
+      } else if (event.target) {
         this.addRing(event.target.x, event.target.y, tile * 0.2, tile * (event.radius || 2), '#9eefff', 0.55);
         this.addSnow(event.target.x, event.target.y, 10);
       }
@@ -719,6 +740,13 @@ export class GameRenderer {
     this.shake *= Math.exp(-dt * 7);
     if (this.shake < 0.05) this.shake = 0;
 
+    // Fog eases its view radius in and out instead of snapping.
+    const me = this.snapshot?.players?.[this.you];
+    const fogActive = Boolean(me && (me.buffs?.fog || 0) > 0);
+    this.fogActive = fogActive;
+    const fogRate = fogActive ? 1 / 0.55 : -1 / 0.45;
+    this.fogBlend = clamp(this.fogBlend + fogRate * dt, 0, 1);
+
     for (const particle of this.particles) {
       particle.life += dt;
       particle.vy += particle.gravity * dt;
@@ -793,7 +821,11 @@ export class GameRenderer {
     if (!vector) return false;
 
     const speedMul =
-      ((buffs.overdrive || 0) > 0 ? 1.25 : 1) * ((buffs.cryo || 0) > 0 ? 0.6 : 1);
+      ((buffs.hyper || 0) > 0
+        ? SKILLS.overdrive.hyperMultiplier
+        : (buffs.overdrive || 0) > 0
+          ? 1.25
+          : 1) * ((buffs.cryo || 0) > 0 ? 0.6 : 1);
     const speed = CONFIG.moveSpeed * speedMul;
     const assist = CONFIG.laneAssistSpeed * dt;
 
@@ -1006,6 +1038,53 @@ export class GameRenderer {
         ctx.fillStyle = gradient;
         ctx.fillRect(x, y, w, h);
 
+        // Animated beacon spilling past the map edge, so the gate reads as the
+        // destination even at a glance.
+        const spill = Math.max(tile * 3.2, 42);
+        const reach = spill * (0.85 + 0.15 * Math.sin(this.time * 2.2 + index));
+        ctx.save();
+        const outward = ctx.createLinearGradient(
+          side === 'left' ? this.offsetX - reach : this.offsetX + this.mapW + reach,
+          0,
+          side === 'left' ? this.offsetX : this.offsetX + this.mapW,
+          0,
+        );
+        const strength = isTarget ? 0.4 + pulse * 0.2 : 0.12;
+        outward.addColorStop(0, `rgba(${team.rgb}, 0)`);
+        outward.addColorStop(0.55, `rgba(${team.rgb}, ${strength * 0.45})`);
+        outward.addColorStop(1, `rgba(${team.rgb}, ${strength})`);
+        ctx.fillStyle = outward;
+        ctx.fillRect(
+          side === 'left' ? this.offsetX - reach : this.offsetX + this.mapW,
+          y,
+          reach,
+          h,
+        );
+        if (isTarget) {
+          const beams = 2;
+          for (let i = 0; i < beams; i += 1) {
+            const t = (this.time * 0.45 + i * 0.5 + index * 0.25) % 1;
+            const beamY = y + h * (0.15 + 0.7 * ((t + i * 0.37) % 1));
+            const beamW = reach * (0.4 + t * 0.6);
+            const beam = ctx.createLinearGradient(
+              side === 'left' ? this.offsetX - beamW : this.offsetX + this.mapW + beamW,
+              0,
+              side === 'left' ? this.offsetX : this.offsetX + this.mapW,
+              0,
+            );
+            beam.addColorStop(0, `rgba(${team.rgb}, 0)`);
+            beam.addColorStop(1, `rgba(${team.bright}, ${0.28 * (1 - t)})`);
+            ctx.fillStyle = beam;
+            ctx.fillRect(
+              side === 'left' ? this.offsetX - beamW : this.offsetX + this.mapW,
+              beamY,
+              beamW,
+              Math.max(1.2, tile * 0.08),
+            );
+          }
+        }
+        ctx.restore();
+
         ctx.save();
         ctx.strokeStyle = `rgba(${team.rgb}, ${isTarget ? 0.48 + pulse * 0.26 : 0.24})`;
         ctx.lineWidth = isTarget ? 1.4 : 0.8;
@@ -1059,38 +1138,44 @@ export class GameRenderer {
         }
 
         if (locked) {
+          const seconds = Math.max(0, Math.ceil((this.snapshot?.lockdownMs ?? 0) / 1000));
           ctx.save();
           ctx.beginPath();
           ctx.rect(x, y, w, h);
           ctx.clip();
-          ctx.fillStyle = 'rgba(12, 7, 9, 0.62)';
+          ctx.fillStyle = 'rgba(28, 4, 7, 0.6)';
           ctx.fillRect(x, y, w, h);
-          ctx.strokeStyle = 'rgba(255, 98, 89, 0.18)';
-          ctx.lineWidth = 1;
-          const hatch = Math.max(5, tile * 0.4);
-          for (let hy = y - w; hy < y + h; hy += hatch) {
+          // Red X hatch across the whole gate band.
+          ctx.strokeStyle = `rgba(255, 74, 62, ${0.35 + pulse * 0.3})`;
+          ctx.lineWidth = Math.max(1, tile * 0.09);
+          const step = Math.max(6, tile * 0.62);
+          for (let sx = x - h; sx < x + w + h; sx += step) {
             ctx.beginPath();
-            ctx.moveTo(x, hy);
-            ctx.lineTo(x + w, hy + w);
+            ctx.moveTo(sx, y);
+            ctx.lineTo(sx + h, y + h);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(sx, y + h);
+            ctx.lineTo(sx + h, y);
             ctx.stroke();
           }
           ctx.restore();
 
           ctx.save();
-          ctx.strokeStyle = 'rgba(255, 98, 89, 0.7)';
+          ctx.strokeStyle = 'rgba(255, 98, 89, 0.85)';
           ctx.lineWidth = Math.max(1, tile * 0.08);
-          ctx.setLineDash([4, 4]);
           ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-          ctx.setLineDash([]);
-          if (tile >= 8) {
-            ctx.translate(x + w / 2, y + h / 2);
-            ctx.rotate(side === 'left' ? -Math.PI / 2 : Math.PI / 2);
-            ctx.font = `700 ${labelFont}px ${FONT_MONO}`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillStyle = 'rgba(255, 150, 140, 0.95)';
-            ctx.fillText('SEALED', 0, 0);
-          }
+          ctx.translate(x + w / 2, y + h / 2);
+          ctx.rotate(side === 'left' ? -Math.PI / 2 : Math.PI / 2);
+          ctx.font = `700 ${Math.max(11, Math.min(22, tile * 0.95))}px ${FONT_MONO}`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          const countdown = `${seconds}s`;
+          const textW = ctx.measureText(countdown).width + tile * 0.5;
+          ctx.fillStyle = 'rgba(20, 3, 5, 0.82)';
+          ctx.fillRect(-textW / 2, -tile * 0.42, textW, tile * 0.84);
+          ctx.fillStyle = '#ffb3ad';
+          ctx.fillText(countdown, 0, 0);
           ctx.restore();
         }
       }
@@ -1219,7 +1304,8 @@ export class GameRenderer {
     ctx.setLineDash([]);
 
     if (targeting.skill === 'build') {
-      // Legal empty cells inside the rival bubble.
+      const mega = (this.snapshot?.players?.[this.you]?.apotheosis ?? 0) > 0;
+      // Legal cells inside the rival bubble.
       if (Array.isArray(targeting.legalCells)) {
         for (const cell of targeting.legalCells) {
           const x = this.offsetX + cell.col * tile;
@@ -1234,17 +1320,22 @@ export class GameRenderer {
           ? [targeting.hover]
           : [];
       for (const cell of ghostCells) {
-        this.#drawGhostBarricade(
-          ctx,
-          this.offsetX + cell.col * tile,
-          this.offsetY + cell.row * tile,
-          true,
-        );
+        const spread = mega ? [-1, 0, 1] : [0];
+        for (const dc of spread) {
+          this.#drawGhostBarricade(
+            ctx,
+            this.offsetX + (cell.col + dc) * tile,
+            this.offsetY + cell.row * tile,
+            true,
+          );
+        }
       }
     } else if (targeting.skill === 'blast' && targeting.hover) {
-      const radius = skill?.radius ?? 1;
+      const mega = (this.snapshot?.players?.[this.you]?.apotheosis ?? 0) > 0;
+      const radius = mega ? SKILLS.blast.megaRadius : skill?.radius ?? 1;
       for (let dc = -radius; dc <= radius; dc += 1) {
         for (let dr = -radius; dr <= radius; dr += 1) {
+          if (mega && Math.hypot(dc, dr) > radius + 0.35) continue;
           const col = targeting.hover.col + dc;
           const row = targeting.hover.row + dr;
           if (col < 0 || col >= this.cols || row < 0 || row >= this.rows) continue;
@@ -1350,21 +1441,70 @@ export class GameRenderer {
     ctx.restore();
   }
 
+  /** Rainbow lucky blocks. Multi-cell clusters share one flowing hue field. */
   drawLuckyPulse(ctx) {
     if (!this.cells || this.luckyCells.size === 0) return;
-    const pulse = 0.32 + 0.34 * Math.sin(this.time * 3.4);
     const tile = this.tile;
+    const gap = tile >= 14 ? 1 : 0;
+    const cols = this.cols;
+    const rows = this.rows;
+    const isLucky = (col, row) =>
+      col >= 0 &&
+      col < cols &&
+      row >= 0 &&
+      row < rows &&
+      this.cells[row * cols + col] === BLOCK.LUCKY;
+
     ctx.save();
-    ctx.strokeStyle = `rgba(255, 215, 106, ${pulse})`;
-    ctx.lineWidth = Math.max(1, tile * 0.07);
-    ctx.setLineDash([Math.max(2, tile * 0.2), Math.max(2, tile * 0.16)]);
-    ctx.lineDashOffset = -this.time * 16;
     for (const index of this.luckyCells) {
-      const col = index % this.cols;
-      const row = Math.floor(index / this.cols);
-      const x = this.offsetX + col * tile + 1.5;
-      const y = this.offsetY + row * tile + 1.5;
-      ctx.strokeRect(x, y, tile - 3, tile - 3);
+      const col = index % cols;
+      const row = Math.floor(index / cols);
+      const x = this.offsetX + col * tile + gap;
+      const y = this.offsetY + row * tile + gap;
+      const size = tile - gap * 2;
+      const hue = (this.time * 90 + col * 24 + row * 19) % 360;
+
+      ctx.fillStyle = `hsl(${hue}, 92%, 56%)`;
+      ctx.fillRect(x, y, size, size);
+
+      // Moving diagonal sheen.
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x, y, size, size);
+      ctx.clip();
+      const sweep = (this.time * 0.55 + col * 0.17 + row * 0.23) % 1;
+      ctx.translate(x - size + sweep * size * 2, y);
+      ctx.rotate(-0.55);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.26)';
+      ctx.fillRect(0, -size, Math.max(2, size * 0.32), size * 3);
+      ctx.restore();
+
+      ctx.fillStyle = `hsla(${(hue + 40) % 360}, 100%, 78%, 0.85)`;
+      ctx.fillRect(x + 1, y + 1, size - 2, Math.max(1, size * 0.1));
+
+      // Only outline outward-facing edges so clusters read as one big block.
+      ctx.strokeStyle = `hsla(${(hue + 180) % 360}, 100%, 86%, 0.9)`;
+      ctx.lineWidth = Math.max(1, tile * 0.06);
+      const x0 = this.offsetX + col * tile;
+      const y0 = this.offsetY + row * tile;
+      ctx.beginPath();
+      if (!isLucky(col, row - 1)) {
+        ctx.moveTo(x0, y0 + 1);
+        ctx.lineTo(x0 + tile, y0 + 1);
+      }
+      if (!isLucky(col, row + 1)) {
+        ctx.moveTo(x0, y0 + tile - 1);
+        ctx.lineTo(x0 + tile, y0 + tile - 1);
+      }
+      if (!isLucky(col - 1, row)) {
+        ctx.moveTo(x0 + 1, y0);
+        ctx.lineTo(x0 + 1, y0 + tile);
+      }
+      if (!isLucky(col + 1, row)) {
+        ctx.moveTo(x0 + tile - 1, y0);
+        ctx.lineTo(x0 + tile - 1, y0 + tile);
+      }
+      ctx.stroke();
     }
     ctx.restore();
   }
@@ -1458,7 +1598,7 @@ export class GameRenderer {
     if (!list) return;
     const player = this.snapshot?.players?.[index];
     const qte = player?.buffs?.qte || 0;
-    const prompt = qte > 0 ? `MASH WASD ${player.thaw?.taps ?? 0}/${player.thaw?.needed ?? 8}` : null;
+    const prompt = qte > 0 ? 'MASH WASD' : null;
     if (list.length === 0 && !prompt) return;
     const view = this.viewPositions[index];
     if (!view) return;
@@ -1517,22 +1657,45 @@ export class GameRenderer {
   }
 
   drawFog(ctx) {
-    const me = this.snapshot?.players?.[this.you];
-    if (!me || !(me.buffs?.fog > 0)) return;
+    if (this.fogBlend <= 0.01) return;
     const view = this.viewPositions[this.you];
     if (!view || this.mapW <= 0) return;
     const tile = this.tile;
     const cx = this.offsetX + view.x * tile;
     const cy = this.offsetY + view.y * tile;
-    const outer = Math.max(tile * 5.6, 96);
-    const inner = tile * 2.2;
+    const blend = this.fogBlend;
+    // The visible radius starts wide and contracts as the fog settles in, then
+    // expands again when the debuff ends.
+    const outer = Math.max(tile * 5.6, 96) * (1.5 - blend * 0.5);
+    const inner = tile * (2.6 - blend * 0.4);
     const gradient = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
-    gradient.addColorStop(0, 'rgba(4, 6, 10, 0)');
-    gradient.addColorStop(0.55, 'rgba(4, 6, 10, 0.62)');
-    gradient.addColorStop(1, 'rgba(4, 6, 10, 0.95)');
+    gradient.addColorStop(0, 'rgba(70, 74, 84, 0)');
+    gradient.addColorStop(0.5, `rgba(64, 68, 78, ${0.55 * blend})`);
+    gradient.addColorStop(0.78, `rgba(52, 56, 66, ${0.85 * blend})`);
+    gradient.addColorStop(1, `rgba(38, 41, 49, ${0.96 * blend})`);
     ctx.save();
     ctx.fillStyle = gradient;
     ctx.fillRect(this.offsetX, this.offsetY, this.mapW, this.mapH);
+
+    // Drifting mist puffs make the grey wall read as fog rather than a mask.
+    const drift = (this.time * 11) % (outer * 2);
+    for (let i = 0; i < 8; i += 1) {
+      const angle = (i / 8) * Math.PI * 2 + this.time * 0.22;
+      const distance = outer * (0.62 + 0.18 * Math.sin(this.time * 0.9 + i));
+      const px = cx + Math.cos(angle) * distance;
+      const py = cy + Math.sin(angle) * distance * 0.8 + Math.sin(this.time + i) * 6;
+      const puff = ctx.createRadialGradient(px, py, 0, px, py, outer * 0.42);
+      puff.addColorStop(0, `rgba(118, 123, 134, ${0.1 * blend})`);
+      puff.addColorStop(1, 'rgba(118, 123, 134, 0)');
+      ctx.fillStyle = puff;
+      ctx.fillRect(px - outer * 0.42, py - outer * 0.42, outer * 0.84, outer * 0.84);
+    }
+    ctx.globalAlpha = blend * 0.35;
+    ctx.strokeStyle = 'rgba(150, 156, 168, 0.4)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, inner + ((drift * 0.2) % 20), 0, Math.PI * 2);
+    ctx.stroke();
     ctx.restore();
   }
 
@@ -1544,7 +1707,7 @@ export class GameRenderer {
     const digging = Boolean(player.mining);
     const bob = digging ? 0 : Math.sin(this.time * 8 + index * 2.3) * tile * 0.018;
     const slow = player.buffs?.cryo > 0;
-    const boosted = player.buffs?.overdrive > 0;
+    const boosted = player.buffs?.overdrive > 0 || player.buffs?.hyper > 0;
     const isYou = index === this.you;
     const offline = player.connected === false;
 
@@ -1576,9 +1739,9 @@ export class GameRenderer {
 
     const hardFrozen = player.buffs?.freeze > 0;
     const qteFrozen = player.buffs?.qte > 0;
-    if (hardFrozen || qteFrozen) {
-      // A hard freeze cage. Red for cheat freeze, ice blue for the QTE freeze.
-      const tone = qteFrozen ? '150, 238, 255' : '255, 120, 96';
+    if (hardFrozen) {
+      // Cheat-mode hard freeze: a red cage.
+      const tone = '255, 120, 96';
       const cage = 0.55 + 0.25 * Math.sin(this.time * 6);
       ctx.strokeStyle = `rgba(${tone}, ${cage})`;
       ctx.lineWidth = Math.max(1, tile * 0.06);
@@ -1594,6 +1757,27 @@ export class GameRenderer {
         const py = y + Math.sin(angle) * tile * 0.55;
         ctx.fillRect(px - 1, py - 1, 2.5, 2.5);
       }
+    } else if (qteFrozen) {
+      // QTE freeze: a thaw meter drawn as a ring around the miner.
+      const progress = clamp(player.thaw?.progress ?? 0, 0, 1);
+      const radius = tile * 0.82;
+      ctx.lineWidth = Math.max(2, tile * 0.13);
+      ctx.strokeStyle = 'rgba(140, 200, 235, 0.26)';
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.stroke();
+      const start = -Math.PI / 2;
+      ctx.strokeStyle = `rgba(150, 238, 255, ${0.7 + 0.3 * Math.sin(this.time * 10)})`;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.arc(x, y, radius, start, start + progress * Math.PI * 2);
+      ctx.stroke();
+      ctx.lineCap = 'butt';
+      ctx.strokeStyle = 'rgba(150, 238, 255, 0.5)';
+      ctx.lineWidth = Math.max(1, tile * 0.05);
+      ctx.beginPath();
+      ctx.arc(x, y, tile * 0.6, 0, Math.PI * 2);
+      ctx.stroke();
     }
 
     if (player.cheat) {

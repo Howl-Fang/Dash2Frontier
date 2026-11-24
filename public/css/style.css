@@ -1205,72 +1205,113 @@ input:focus-visible {
   transition: width 0.18s linear;
 }
 
-.progress-meter {
-  height: 6px;
+/* Energy is a single wide bar: the label sits at one end and the number is
+   printed inside the track instead of on a separate row. */
+.energy-meter {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 20px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.06);
 }
 
-.player-card-one .progress-meter > span {
-  background: linear-gradient(90deg, rgba(75, 224, 208, 0.45), var(--p1));
-  box-shadow: 0 0 9px rgba(75, 224, 208, 0.42);
+.energy-fill {
+  position: absolute;
+  inset: 0;
+  width: 0;
+  background: linear-gradient(90deg, rgba(75, 224, 208, 0.24), rgba(75, 224, 208, 0.12));
+  transition: width 0.12s linear;
 }
 
-.player-card-two .progress-meter > span {
-  background: linear-gradient(90deg, var(--p2), rgba(255, 138, 76, 0.45));
-  box-shadow: 0 0 9px rgba(255, 138, 76, 0.42);
+.player-card-two .energy-meter {
+  justify-content: flex-end;
 }
 
-.energy-row {
-  margin-top: 2px;
+.player-card-two .energy-fill {
+  right: 0;
+  left: auto;
+  background: linear-gradient(270deg, rgba(255, 138, 76, 0.28), rgba(255, 138, 76, 0.12));
 }
 
-.player-card-one .energy-meter > span {
-  background: var(--p1);
-  opacity: 0.7;
+.energy-label,
+.energy-value {
+  position: relative;
+  z-index: 1;
+  font-family: var(--font-mono);
+  line-height: 1;
 }
 
-.player-card-two .energy-meter > span {
-  background: var(--p2);
-  opacity: 0.7;
+.energy-label {
+  margin-left: 8px;
+  color: var(--muted);
+  font-size: 8px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
+.player-card-two .energy-label {
+  margin-right: 8px;
+  margin-left: 0;
+  order: 3;
+}
+
+.energy-value {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+/* ── Status chips (icon-first, one row, fade the overflow) ──────────── */
 .buff-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-  min-height: 28px;
-  margin-top: 6px;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  gap: 5px;
+  min-height: 52px;
+  margin-top: 7px;
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, #000 86%, transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, #000 86%, transparent 100%);
 }
 
 .player-card-two .buff-row {
   justify-content: flex-end;
+  mask-image: linear-gradient(270deg, #000 74%, transparent 100%);
+  -webkit-mask-image: linear-gradient(270deg, #000 74%, transparent 100%);
 }
 
 .buff-chip {
   display: inline-flex;
+  flex: 0 0 auto;
+  flex-direction: column;
   align-items: center;
-  gap: 7px;
-  padding: 5px 10px 5px 7px;
+  gap: 3px;
+  width: 40px;
+  padding: 4px 2px 3px;
   border: 1px solid var(--line);
   border-radius: 4px;
-  background: rgba(9, 11, 16, 0.55);
+  background: rgba(9, 11, 16, 0.6);
   color: var(--muted-strong);
   font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
   cursor: help;
 }
 
 .buff-chip .chip-icon {
   display: inline-flex;
   flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
 }
 
 .buff-chip .chip-glyph {
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.8;
@@ -1279,14 +1320,23 @@ input:focus-visible {
 }
 
 .buff-chip .chip-name {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 7.5px;
   font-weight: 700;
   line-height: 1;
+  letter-spacing: 0.04em;
+  text-align: center;
+  text-overflow: clip;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .buff-chip .chip-value {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 7.5px;
   line-height: 1;
+  letter-spacing: 0;
 }
 
 .buff-chip.is-buff {
@@ -1306,6 +1356,8 @@ input:focus-visible {
 
 .status-tip {
   position: fixed;
+  top: 0;
+  left: 0;
   z-index: 40;
   max-width: 300px;
   padding: 8px 10px;
@@ -1318,6 +1370,7 @@ input:focus-visible {
   line-height: 1.55;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   pointer-events: none;
+  will-change: transform;
 }
 
 .dev-sidebar {
@@ -1508,19 +1561,6 @@ input:focus-visible {
   to {
     opacity: 0.62;
   }
-}
-
-.lockdown-badge {
-  margin-top: 2px;
-  padding: 3px 8px;
-  border: 1px solid rgba(255, 98, 89, 0.6);
-  background: rgba(30, 8, 9, 0.85);
-  color: #ffb3ad;
-  font-family: var(--font-mono);
-  font-size: 8px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  animation: offline-pulse 1.1s ease-in-out infinite alternate;
 }
 
 .race-track {
@@ -2688,7 +2728,8 @@ input:focus-visible {
   }
 
   .buff-row {
-    display: none;
+    min-height: 44px;
+    gap: 4px;
   }
 
   .timer {
@@ -2788,7 +2829,7 @@ input:focus-visible {
   }
 
   .buff-row {
-    min-height: 14px;
+    min-height: 44px;
   }
 
   .skill-card {
