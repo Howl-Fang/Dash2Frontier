@@ -41,6 +41,7 @@ const TIMED_BUFFS = Object.freeze([
   'balance',
   'mundane',
   'hijack',
+  'hyper',
   'examPass',
   'examFail',
 ]);
@@ -124,12 +125,13 @@ export class Game {
         balance: 0,
         mundane: 0,
         hijack: 0,
+        hyper: 0,
         examPass: 0,
         examFail: 0,
       },
       luckCharges: 0,
-      thawTaps: 0,
-      thawNeeded: 0,
+      apotheosis: 0,
+      thawProgress: 0,
       exam: null,
       cheat: false,
       stats: { blocksMined: 0, skillsUsed: 0, cellsMoved: 0 },
@@ -247,8 +249,13 @@ export class Game {
         player.buffs[key] = Math.max(0, player.buffs[key] - dt);
       }
       if (player.buffs.qte <= 0) {
-        player.thawTaps = 0;
-        player.thawNeeded = 0;
+        player.thawProgress = 0;
+      } else {
+        // The thaw meter drains quickly, so tapping has to be sustained.
+        player.thawProgress = Math.max(
+          0,
+          player.thawProgress - EFFECTS.freeze.decayPerSecond * dt,
+        );
       }
       player.blockedCooldown = Math.max(0, player.blockedCooldown - dt);
       player.energy = Math.min(
@@ -488,13 +495,16 @@ export class Game {
   }
 
   #moveMultiplier(player) {
+    if (player.buffs.hyper > 0) return SKILLS.overdrive.hyperMultiplier;
     const overdrive = player.buffs.overdrive > 0 ? SKILLS.overdrive.moveMultiplier : 1;
     const cryo = player.buffs.cryo > 0 ? SKILLS.cryo.moveMultiplier : 1;
     return overdrive * cryo;
   }
 
   #mineMultiplier(player) {
-    const overdrive = player.buffs.overdrive > 0 ? SKILLS.overdrive.mineMultiplier : 1;
+    const hyper = player.buffs.hyper > 0 ? SKILLS.overdrive.hyperMultiplier : 1;
+    const overdrive =
+      hyper > 1 ? 1 : player.buffs.overdrive > 0 ? SKILLS.overdrive.mineMultiplier : 1;
     const cryo = player.buffs.cryo > 0 ? SKILLS.cryo.mineMultiplier : 1;
     const hijack = player.buffs.hijack > 0 ? EFFECTS.hijack.mineMultiplier : 1;
     let balance = 1;
@@ -510,7 +520,7 @@ export class Game {
     }
     const examPass = player.buffs.examPass > 0 ? this.config.exam.passMultiplier : 1;
     const examFail = player.buffs.examFail > 0 ? this.config.exam.failMultiplier : 1;
-    return overdrive * cryo * hijack * balance * examPass * examFail;
+    return hyper * overdrive * cryo * hijack * balance * examPass * examFail;
   }
 
   /**
@@ -570,7 +580,11 @@ export class Game {
       }
       player.mining = {
         ...candidate,
-        baseTime: BLOCK_TYPES[candidate.block].mineTime,
+        baseTime:
+          BLOCK_TYPES[candidate.block].mineTime *
+          (candidate.block === BLOCK.LUCKY
+            ? Math.max(1, this.#luckyCluster(candidate.col, candidate.row).length)
+            : 1),
         elapsed: 0,
       };
       this.pendingEvents.push({
@@ -579,7 +593,7 @@ export class Game {
         col: candidate.col,
         row: candidate.row,
         block: candidate.block,
-        baseTimeMs: BLOCK_TYPES[candidate.block].mineTime * 1000,
+        baseTimeMs: player.mining.baseTime * 1000,
       });
       return;
     }
@@ -607,14 +621,33 @@ export class Game {
   }
 
   /**
-   * Break the current face, plus one extra block straight ahead while the Echo
-   * Form buff is active ("two blocks per dig").
+   * Break the current face. A lucky block is one cluster: the whole cluster is
+   * cleared in one dig (its dig time scales with the cluster size) and every
+   * cell rolls its own outcome at the same time. Echo Form adds one extra block
+   * straight ahead, as usual.
    */
   #breakTarget(player, target) {
-    const index = cellIndex(target.col, target.row, this.map.cols);
-    if (!this.#breakBlock(index, target.col, target.row, target.block, player, 'dig')) {
-      return;
+    if (target.block === BLOCK.LUCKY) {
+      const cluster = this.#luckyCluster(target.col, target.row);
+      if (cluster.length === 0) return;
+      for (const index of cluster) {
+        const col = index % this.map.cols;
+        const row = Math.floor(index / this.map.cols);
+        this.#breakBlock(index, col, row, BLOCK.LUCKY, player, 'dig', undefined, false);
+      }
+      for (const index of cluster) {
+        const col = index % this.map.cols;
+        const row = Math.floor(index / this.map.cols);
+        this.#triggerLucky(player, col, row);
+      }
+    } else {
+      const index = cellIndex(target.col, target.row, this.map.cols);
+      if (!this.#breakBlock(index, target.col, target.row, target.block, player, 'dig')) {
+        return;
+      }
     }
+
+    // Echo Form adds one extra block straight ahead.
     if (player.buffs.echo <= 0) return;
     const direction = DIRECTIONS[player.facing];
     if (!direction) return;
@@ -629,7 +662,47 @@ export class Game {
     this.#breakBlock(echoIndex, col, row, echoBlock, player, 'echo');
   }
 
-  #breakBlock(index, col, row, block, player, method, energyGain = this.config.energy.perBlock) {
+  /** All 4-connected lucky cells around one cell (the cluster it belongs to). */
+  #luckyCluster(col, row) {
+    const { cols, rows } = this.map;
+    const start = cellIndex(col, row, cols);
+    if (this.map.cells[start] !== BLOCK.LUCKY) return [];
+    const seen = new Set([start]);
+    const stack = [start];
+    const cluster = [];
+    while (stack.length > 0) {
+      const index = stack.pop();
+      cluster.push(index);
+      const c = index % cols;
+      const r = Math.floor(index / cols);
+      for (const [dc, dr] of [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ]) {
+        const nc = c + dc;
+        const nr = r + dr;
+        if (nc < 0 || nc >= cols || nr < 0 || nr >= rows) continue;
+        const next = cellIndex(nc, nr, cols);
+        if (seen.has(next) || this.map.cells[next] !== BLOCK.LUCKY) continue;
+        seen.add(next);
+        stack.push(next);
+      }
+    }
+    return cluster;
+  }
+
+  #breakBlock(
+    index,
+    col,
+    row,
+    block,
+    player,
+    method,
+    energyGain = this.config.energy.perBlock,
+    triggerLucky = true,
+  ) {
     if (this.map.cells[index] !== block) return false;
     this.map.cells[index] = BLOCK.EMPTY;
     this.pendingChanges.push({ i: index, block: BLOCK.EMPTY });
@@ -644,7 +717,7 @@ export class Game {
       method,
     });
     // Blasting never detonates a lucky block; only actually digging it does.
-    if (block === BLOCK.LUCKY && method !== 'blast') {
+    if (triggerLucky && block === BLOCK.LUCKY && method !== 'blast') {
       this.#triggerLucky(player, col, row);
     }
     return true;
@@ -772,12 +845,14 @@ export class Game {
         target.energy = 0;
       } else if (effectId === 'luck') {
         target.luckCharges = Math.max(target.luckCharges, def.charges);
+      } else if (effectId === 'apotheosis') {
+        target.apotheosis = Math.max(target.apotheosis, def.charges || 1);
       } else if (effectId === 'freeze') {
         target.buffs.qte = Math.max(target.buffs.qte, def.duration);
-        target.thawTaps = 0;
-        target.thawNeeded = def.taps;
+        target.thawProgress = def.startProgress;
       } else if (effectId === 'lockdown') {
         this.lockdown = Math.max(this.lockdown, def.duration);
+        this.#expelFromGates();
       } else if (effectId === 'exam') {
         this.#startExam(target);
       } else if (effectId === 'hijack') {
@@ -805,21 +880,21 @@ export class Game {
     return { blocked };
   }
 
-  /** QTE thaw: each direction tap chips away at the freeze. */
+  /** QTE thaw: every direction tap fills the thaw meter, which decays. */
   tapThaw(index) {
     const player = this.players[index];
     if (!player || player.buffs.qte <= 0) {
       return { ok: false, error: 'frozen', message: 'You are not frozen.' };
     }
-    player.thawTaps += 1;
-    if (player.thawTaps >= player.thawNeeded) {
+    const gain = EFFECTS.freeze.tapGain;
+    player.thawProgress = Math.min(1, player.thawProgress + gain);
+    if (player.thawProgress >= 1 - 1e-6) {
       player.buffs.qte = 0;
-      player.thawTaps = 0;
-      player.thawNeeded = 0;
+      player.thawProgress = 0;
       this.pendingEvents.push({ type: 'thawed', player: index });
       return { ok: true, thawed: true };
     }
-    return { ok: true, taps: player.thawTaps, needed: player.thawNeeded };
+    return { ok: true, progress: round(player.thawProgress, 3) };
   }
 
   submitExam(index, answers) {
@@ -941,6 +1016,28 @@ export class Game {
     this.#finish(player.index, 'breach', gate);
   }
 
+  /** Lockdown slams the gates shut and shoves anyone standing in one outside. */
+  #expelFromGates() {
+    for (const player of this.players) {
+      const col = clamp(Math.floor(player.x), 0, this.map.cols - 1);
+      const row = clamp(Math.floor(player.y), 0, this.map.rows - 1);
+      if (!isGoalTriggerCell(col, row, this.config)) continue;
+      const leftSide = col <= 1;
+      player.x = leftSide ? 2.5 : this.map.cols - 3.5;
+      player.mining = null;
+      this.pendingEvents.push({
+        type: 'blocked',
+        player: player.index,
+        x: round(player.x, 3),
+        y: round(player.y, 3),
+        col,
+        row,
+        dir: player.facing,
+        reason: 'locked',
+      });
+    }
+  }
+
   #progressFor(player) {
     const distance = distanceToGoalZone(this.config, player.index, player.x, player.y);
     const initial = this.startGoalDistances[player.index];
@@ -1022,28 +1119,43 @@ export class Game {
     let target = null;
     let cells = [];
     let extra = {};
+    const empowered = player.apotheosis > 0;
 
     if (skillId === 'build') {
-      const result = this.#castBuild(player, opponent, payload, skill);
+      const result = this.#castBuild(player, opponent, payload, skill, empowered);
       if (result.error) return { ok: false, ...result };
       target = result.target;
       cells = result.cells;
     } else if (skillId === 'blast') {
-      const result = this.#castBlast(player, payload, skill);
+      const result = this.#castBlast(player, payload, skill, empowered);
       if (result.error) return { ok: false, ...result };
       target = result.target;
       cells = result.cells;
     } else if (skillId === 'cryo') {
-      const result = this.#castCryo(player, opponent, payload, skill);
-      if (result.error) return { ok: false, ...result };
-      target = result.target;
-      extra = { radius: skill.radius, delayMs: Math.round(skill.delay * 1000) };
+      if (empowered) {
+        const result = this.#castFrostbite(player, opponent, payload, skill);
+        if (result.error) return { ok: false, ...result };
+        target = result.target;
+        cells = result.cells;
+        extra = { frostbite: true };
+      } else {
+        const result = this.#castCryo(player, opponent, payload, skill);
+        if (result.error) return { ok: false, ...result };
+        target = result.target;
+        extra = { radius: skill.radius, delayMs: Math.round(skill.delay * 1000) };
+      }
     } else if (skillId === 'overdrive') {
-      player.buffs.overdrive = Math.max(player.buffs.overdrive, skill.duration);
+      if (empowered) {
+        player.buffs.hyper = Math.max(player.buffs.hyper, skill.duration);
+      } else {
+        player.buffs.overdrive = Math.max(player.buffs.overdrive, skill.duration);
+      }
+      extra = { hyper: empowered };
     } else {
       return { ok: false, error: 'skill', message: 'Unknown skill.' };
     }
 
+    if (empowered) player.apotheosis = 0;
     player.energy -= skill.cost;
     const lagMultiplier = player.buffs.lag > 0 ? EFFECTS.lag.cooldownMultiplier : 1;
     player.cooldowns[skillId] = skill.cooldown * lagMultiplier;
@@ -1054,10 +1166,11 @@ export class Game {
       skill: skillId,
       target,
       cells,
+      empowered,
       ...extra,
     });
 
-    return { ok: true, target, cells };
+    return { ok: true, target, cells, empowered };
   }
 
   #isValidCell(col, row) {
@@ -1085,17 +1198,17 @@ export class Game {
     );
   }
 
-  #castBuild(player, opponent, payload, skill) {
+  #castBuild(player, opponent, payload, skill, empowered = false) {
     const rawCells = Array.isArray(payload?.cells) ? payload.cells : [];
     if (rawCells.length < 1 || rawCells.length > skill.maxCells) {
       return {
         error: 'target',
-        message: `Select 1–${skill.maxCells} empty cells near the rival.`,
+        message: `Select 1–${skill.maxCells} cells near the rival.`,
       };
     }
 
     const seen = new Set();
-    const cells = [];
+    const anchors = [];
     for (const entry of rawCells) {
       const col = Number(entry?.col);
       const row = Number(entry?.row);
@@ -1107,8 +1220,8 @@ export class Game {
         return { error: 'target', message: 'Pick different cells for each barricade.' };
       }
       seen.add(key);
-      if (this.map.cells[cellIndex(col, row, this.map.cols)] !== BLOCK.EMPTY) {
-        return { error: 'target', message: 'Barricades need empty cells.' };
+      if (this.map.cells[cellIndex(col, row, this.map.cols)] === BLOCK.BEDROCK) {
+        return { error: 'target', message: 'Bedrock cannot be built over.' };
       }
       if (isGoalTriggerCell(col, row, this.config)) {
         return { error: 'target', message: 'You cannot seal a gate.' };
@@ -1122,13 +1235,46 @@ export class Game {
       ) {
         return { error: 'target', message: 'You cannot build on a miner.' };
       }
-      cells.push({ col, row });
+      anchors.push({ col, row });
     }
 
+    // MegaBuild widens every chosen cell into a 3×1 strip.
+    const targets = new Map();
+    const addTarget = (col, row) => {
+      if (!this.#isValidCell(col, row)) return;
+      if (isGoalTriggerCell(col, row, this.config)) return;
+      if (this.map.cells[cellIndex(col, row, this.map.cols)] === BLOCK.BEDROCK) return;
+      if (
+        this.#cellOverlapsPlayer(player, col, row) ||
+        this.#cellOverlapsPlayer(opponent, col, row)
+      ) {
+        return;
+      }
+      targets.set(`${col},${row}`, { col, row });
+    };
+    for (const anchor of anchors) {
+      addTarget(anchor.col, anchor.row);
+      if (empowered) {
+        for (let dc = -1; dc <= 1; dc += 1) addTarget(anchor.col + dc, anchor.row);
+      }
+    }
+
+    const cells = [...targets.values()];
+    if (cells.length === 0) {
+      return { error: 'target', message: 'No room for a barricade there.' };
+    }
     for (const cell of cells) {
       const index = cellIndex(cell.col, cell.row, this.map.cols);
       this.map.cells[index] = BLOCK.BARRICADE;
       this.pendingChanges.push({ i: index, block: BLOCK.BARRICADE });
+    }
+    for (const other of this.players) {
+      if (
+        other.mining &&
+        cells.some((cell) => cell.col === other.mining.col && cell.row === other.mining.row)
+      ) {
+        other.mining = null;
+      }
     }
 
     const avgX = cells.reduce((sum, cell) => sum + cell.col + 0.5, 0) / cells.length;
@@ -1136,7 +1282,7 @@ export class Game {
     return { target: { x: round(avgX, 3), y: round(avgY, 3) }, cells };
   }
 
-  #castBlast(player, payload, skill) {
+  #castBlast(player, payload, skill, empowered = false) {
     const col = Number(payload?.target?.col);
     const row = Number(payload?.target?.row);
     if (!this.#isValidCell(col, row)) {
@@ -1145,10 +1291,13 @@ export class Game {
     if (this.#cellDistanceToPlayer(player, col, row) > skill.range + 1e-6) {
       return { error: 'target', message: 'That blast is out of range.' };
     }
+    const radius = empowered ? skill.megaRadius : skill.radius;
 
     const cleared = [];
-    for (let dc = -skill.radius; dc <= skill.radius; dc += 1) {
-      for (let dr = -skill.radius; dr <= skill.radius; dr += 1) {
+    for (let dc = -radius; dc <= radius; dc += 1) {
+      for (let dr = -radius; dr <= radius; dr += 1) {
+        // GigaBlast is a circle; a normal Blast is a 3×3 square.
+        if (empowered && Math.hypot(dc, dr) > radius + 0.35) continue;
         const blastCol = col + dc;
         const blastRow = row + dr;
         if (!this.#isValidCell(blastCol, blastRow)) continue;
@@ -1212,6 +1361,49 @@ export class Game {
     return { target: { x: col + 0.5, y: row + 0.5 } };
   }
 
+  /**
+   * Empowered Cryo (Frostbite): instead of a delayed chill, the whole 5×5 area
+   * around the burst point freezes into obsidian-hard ice.
+   */
+  #castFrostbite(player, opponent, payload, skill) {
+    const col = Number(payload?.target?.col);
+    const row = Number(payload?.target?.row);
+    if (!this.#isValidCell(col, row)) {
+      return { error: 'target', message: 'Pick a burst point.' };
+    }
+    if (this.#cellDistanceToPlayer(opponent, col, row) > skill.range + 1e-6) {
+      return { error: 'target', message: 'The burst must land near the rival.' };
+    }
+
+    const radius = skill.frostbiteRadius;
+    const changed = [];
+    for (let dc = -radius; dc <= radius; dc += 1) {
+      for (let dr = -radius; dr <= radius; dr += 1) {
+        const targetCol = col + dc;
+        const targetRow = row + dr;
+        if (!this.#isValidCell(targetCol, targetRow)) continue;
+        if (this.#isBaselineColumn(targetCol)) continue;
+        if (this.#playersOverlapCell(targetCol, targetRow)) continue;
+        const index = cellIndex(targetCol, targetRow, this.map.cols);
+        const block = this.map.cells[index];
+        if (block === BLOCK.BEDROCK || block === BLOCK.ICE) continue;
+        this.#setBlock(targetCol, targetRow, BLOCK.ICE, changed);
+      }
+    }
+    if (changed.length === 0) {
+      return { error: 'target', message: 'Nothing can freeze there.' };
+    }
+    for (const other of this.players) {
+      if (
+        other.mining &&
+        changed.some((cell) => cell.col === other.mining.col && cell.row === other.mining.row)
+      ) {
+        other.mining = null;
+      }
+    }
+    return { target: { x: col + 0.5, y: row + 0.5 }, cells: changed };
+  }
+
   setDirectionFromInput(index, direction) {
     return this.setDirection(index, direction);
   }
@@ -1261,9 +1453,10 @@ export class Game {
             .map(([key, remaining]) => [key, round(remaining, 1)]),
         ),
         luckCharges: player.luckCharges,
+        apotheosis: player.apotheosis,
         thaw:
           player.buffs.qte > 0
-            ? { taps: player.thawTaps, needed: player.thawNeeded }
+            ? { progress: round(player.thawProgress, 3) }
             : null,
         // Exam questions are sent once (examStart event / game:exam on join);
         // snapshots only carry the countdown so the timer can tick locally.

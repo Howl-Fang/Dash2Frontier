@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { BLOCK, CONFIG } from '../shared/config.js';
+import { BLOCK, CONFIG, SKILLS } from '../shared/config.js';
 import { Game } from '../server/game.js';
 import { cellIndex } from '../server/map.js';
 
@@ -255,7 +255,7 @@ test('Build places several barricades near the rival and spends resources', () =
   assert.equal(get(game, 9, 14), BLOCK.BARRICADE);
   assert.equal(get(game, 10, 13), BLOCK.BARRICADE);
   assert.equal(game.getPlayer(0).energy, 15);
-  assert.equal(game.getPlayer(0).cooldowns.build, 16);
+  assert.equal(game.getPlayer(0).cooldowns.build, SKILLS.build.cooldown);
   assert.equal(game.getPlayer(0).stats.skillsUsed, 1);
 });
 
@@ -550,7 +550,7 @@ test('Invert reverses movement and facing for a timed window', () => {
   const map = makeMap();
   set(map, 2, 13, BLOCK.LUCKY);
 
-  const rolls = [0.25, 0.1];
+  const rolls = [0.28, 0.1];
   const game = luckyGame({ map, random: () => rolls.shift() ?? 0.5 });
   const player = game.getPlayer(0);
   game.setDirection(0, 'right');
@@ -615,7 +615,7 @@ test('turning cheat mode off restores normal mining rules', () => {
 test('lucky debuffs usually land on the rival', () => {
   const map = makeMap();
   set(map, 1, 13, BLOCK.LUCKY);
-  const game = luckyGame({ map, random: () => 0.25 });
+  const game = luckyGame({ map, random: () => 0.28 });
   game.setDirection(0, 'right');
   advance(game, 0.4);
 
@@ -704,21 +704,26 @@ test('Lag lengthens skill cooldowns', () => {
   assert.ok(game.getPlayer(0).cooldowns.overdrive > 18 * 1.7);
 });
 
-test('QTE freeze immobilises until enough direction taps thaw it', () => {
+test('QTE freeze fills a decaying thaw meter until it breaks', () => {
   const game = newGame();
   const victim = game.getPlayer(1);
   assert.equal(game.applyDevEffect(0, 'freeze', 'rival').ok, true);
   assert.ok(victim.buffs.qte > 0);
-  assert.equal(victim.thawNeeded, 8);
+  const start = victim.thawProgress;
+  assert.ok(start > 0);
+
+  // Progress decays on its own, so a slow tapped meter must not hold.
+  advance(game, 0.2);
+  assert.ok(victim.thawProgress < start);
 
   game.setDirection(1, 'left');
   advance(game, 1);
   assert.equal(victim.x, 11.5);
+  assert.equal(victim.thawProgress, 0);
   assert.ok(game.snapshot().players[1].thaw);
 
-  for (let i = 0; i < 7; i += 1) game.tapThaw(1);
-  advance(game, 0.1);
-  assert.equal(victim.x, 11.5);
+  for (let i = 0; i < 6; i += 1) game.tapThaw(1);
+  assert.ok(victim.buffs.qte > 0);
   assert.equal(game.tapThaw(1).thawed, true);
   advance(game, 0.2);
   assert.ok(victim.x < 11.5);
@@ -833,4 +838,86 @@ test('Lockdown seals both gates and blocks entry until it expires', () => {
   advance(game, 8.5);
   assert.equal(game.phase, 'finished');
   assert.equal(game.winner, 0);
+});
+
+test('a multi-cell lucky cluster clears at once and rolls per cell', () => {
+  const map = makeMap();
+  set(map, 1, 13, BLOCK.LUCKY);
+  set(map, 2, 13, BLOCK.LUCKY);
+  const game = luckyGame({ map, random: () => 0.05 });
+  game.setDirection(0, 'right');
+  advance(game, 0.8);
+
+  assert.equal(get(game, 1, 13), BLOCK.EMPTY);
+  assert.equal(get(game, 2, 13), BLOCK.EMPTY);
+  const effects = game.takeEvents().filter((event) => event.type === 'effect');
+  assert.equal(effects.length, 2);
+  assert.ok(effects.every((event) => event.effect === 'echo'));
+});
+
+test('Build can overwrite diggable rock but not bedrock', () => {
+  const map = makeMap();
+  set(map, 9, 13, BLOCK.GRANITE);
+  set(map, 9, 14, BLOCK.BEDROCK);
+  const game = newGame({ map });
+
+  const ok = game.castSkill(0, 'build', { cells: [{ col: 9, row: 13 }] });
+  assert.equal(ok.ok, true);
+  assert.equal(get(game, 9, 13), BLOCK.BARRICADE);
+
+  const blocked = game.castSkill(0, 'build', { cells: [{ col: 9, row: 14 }] });
+  assert.equal(blocked.ok, false);
+  assert.equal(get(game, 9, 14), BLOCK.BEDROCK);
+});
+
+test('Apotheosis empowers exactly one skill cast', () => {
+  // MegaBuild: one anchor becomes a 3×1 strip.
+  const buildGame = newGame();
+  buildGame.getPlayer(0).apotheosis = 1;
+  const built = buildGame.castSkill(0, 'build', { cells: [{ col: 9, row: 13 }] });
+  assert.equal(built.ok, true);
+  assert.equal(built.empowered, true);
+  assert.equal(built.cells.length, 3);
+  assert.equal(get(buildGame, 8, 13), BLOCK.BARRICADE);
+  assert.equal(get(buildGame, 9, 13), BLOCK.BARRICADE);
+  assert.equal(get(buildGame, 10, 13), BLOCK.BARRICADE);
+  assert.equal(buildGame.getPlayer(0).apotheosis, 0);
+  const plainGame = newGame();
+  const plain = plainGame.castSkill(0, 'build', { cells: [{ col: 9, row: 14 }] });
+  assert.equal(plain.empowered, false);
+  assert.equal(plain.cells.length, 1);
+
+  // HyperDrive: the next Overdrive runs at ×5.
+  const driveGame = newGame();
+  driveGame.getPlayer(0).apotheosis = 1;
+  const drive = driveGame.castSkill(0, 'overdrive', {});
+  assert.equal(drive.ok, true);
+  assert.equal(drive.empowered, true);
+  assert.ok(driveGame.getPlayer(0).buffs.hyper > 0);
+  assert.equal(driveGame.getPlayer(0).buffs.overdrive, 0);
+  assert.equal(driveGame.getPlayer(0).apotheosis, 0);
+
+  // Frostbite: a 5×5 patch of hard ice appears instantly.
+  const cryoGame = newGame();
+  cryoGame.getPlayer(0).apotheosis = 1;
+  const frost = cryoGame.castSkill(0, 'cryo', { target: { col: 9, row: 13 } });
+  assert.equal(frost.ok, true);
+  assert.equal(frost.empowered, true);
+  assert.equal(get(cryoGame, 9, 13), BLOCK.ICE);
+  assert.equal(get(cryoGame, 7, 11), BLOCK.ICE);
+  assert.equal(get(cryoGame, 9, 13) === BLOCK.ICE, true);
+
+  // GigaBlast: 7×7 circle, so the square corners survive.
+  const blastMap = makeMap();
+  for (let dc = -3; dc <= 3; dc += 1) {
+    for (let dr = -3; dr <= 3; dr += 1) set(blastMap, 6 + dc, 13 + dr, BLOCK.SOIL);
+  }
+  const blastGame = newGame({ map: blastMap });
+  blastGame.getPlayer(0).apotheosis = 1;
+  const blast = blastGame.castSkill(0, 'blast', { target: { col: 6, row: 13 } });
+  assert.equal(blast.ok, true);
+  assert.equal(blast.empowered, true);
+  assert.ok(blast.cells.length >= 25);
+  assert.equal(get(blastGame, 3, 10), BLOCK.SOIL);
+  assert.equal(get(blastGame, 6, 13), BLOCK.EMPTY);
 });

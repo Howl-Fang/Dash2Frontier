@@ -358,10 +358,14 @@ test('a frozen player can mash direction keys to thaw', async () => {
     );
 
     let thawed = null;
-    for (let i = 0; i < 8; i += 1) {
-      thawed = await ackFor(guest, 'game:thaw', {});
+    for (let i = 0; i < 9; i += 1) {
+      const result = await ackFor(guest, 'game:thaw', {});
+      if (result.thawed) {
+        thawed = result;
+        break;
+      }
     }
-    assert.equal(thawed.thawed, true);
+    assert.equal(thawed?.thawed, true);
   } finally {
     await closeServer(server, sockets);
   }
