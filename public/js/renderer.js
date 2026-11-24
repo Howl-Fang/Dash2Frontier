@@ -25,6 +25,16 @@ const FACING_VECTOR = {
   right: { x: 1, y: 0 },
 };
 
+const TEXT_TONES = {
+  info: '#e8e4da',
+  buff: '#ffe08a',
+  debuff: '#ff9a8f',
+  tradeoff: '#c3b0ff',
+  cyan: '#8ef0e4',
+  danger: '#ff6f66',
+  gold: '#ffd76a',
+};
+
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const rand = (min, max) => min + Math.random() * (max - min);
 const truncate = (value, limit) => {
@@ -71,6 +81,7 @@ export class GameRenderer {
 
     this.particles = [];
     this.rings = [];
+    this.playerTexts = [[], []];
     this.shake = 0;
     this.time = 0;
     this.lastFrame = 0;
@@ -102,6 +113,7 @@ export class GameRenderer {
     this.snapshot = null;
     this.particles = [];
     this.rings = [];
+    this.playerTexts = [[], []];
     this.shake = 0;
     this.barricadeCells.clear();
     this.luckyCells.clear();
@@ -510,6 +522,18 @@ export class GameRenderer {
     this.addShake(good ? 2.4 : 3.4);
   }
 
+  /** Floating callout above one miner. Stacked so simultaneous events never overlap. */
+  addPlayerText(index, text, tone = 'info') {
+    const list = this.playerTexts[index];
+    if (!list || !text) return;
+    list.push({ text: String(text), tone, life: 0, maxLife: 2.6 });
+    while (list.length > 4) list.shift();
+  }
+
+  clearPlayerTexts() {
+    this.playerTexts = [[], []];
+  }
+
   addBlocked(event) {
     if (!event) return;
     const dir = FACING_VECTOR[event.dir] || { x: 0, y: 0 };
@@ -674,6 +698,13 @@ export class GameRenderer {
     for (const ring of this.rings) ring.life += dt;
     this.rings = this.rings.filter((ring) => ring.life < ring.maxLife);
 
+    for (const list of this.playerTexts) {
+      for (const entry of list) entry.life += dt;
+    }
+    this.playerTexts = this.playerTexts.map((list) =>
+      list.filter((entry) => entry.life < entry.maxLife),
+    );
+
     if (this.snapshot?.players) {
       for (let i = 0; i < 2; i += 1) {
         const player = this.snapshot.players[i];
@@ -725,6 +756,8 @@ export class GameRenderer {
     this.drawCryoTelegraphs(ctx);
     this.drawTargeting(ctx);
     this.drawPlayers(ctx);
+    this.drawPlayerTexts(ctx, 0);
+    this.drawPlayerTexts(ctx, 1);
     this.drawParticles(ctx);
     this.drawMapLabels(ctx);
     ctx.restore();
@@ -1216,6 +1249,35 @@ export class GameRenderer {
       if (!view) continue;
       this.drawPlayer(ctx, player, i, view);
     }
+  }
+
+  drawPlayerTexts(ctx, index) {
+    const list = this.playerTexts[index];
+    if (!list || list.length === 0) return;
+    const view = this.viewPositions[index];
+    if (!view) return;
+    const tile = this.tile;
+    const fontSize = Math.max(8, Math.min(12, tile * 0.46));
+    const baseX = this.offsetX + view.x * tile;
+    const baseY = this.offsetY + view.y * tile - tile * 0.86 - 26;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `700 ${fontSize}px ${FONT_MONO}`;
+    for (let i = 0; i < list.length; i += 1) {
+      const entry = list[i];
+      const progress = clamp(entry.life / entry.maxLife, 0, 1);
+      const fadeIn = progress < 0.12 ? progress / 0.12 : 1;
+      const fadeOut = progress > 0.68 ? 1 - (progress - 0.68) / 0.32 : 1;
+      const y = baseY - i * (fontSize + 5) - progress * 10;
+      const width = ctx.measureText(entry.text).width + 10;
+      ctx.globalAlpha = clamp(Math.min(fadeIn, fadeOut), 0, 1);
+      ctx.fillStyle = 'rgba(7, 9, 13, 0.85)';
+      ctx.fillRect(baseX - width / 2, y - (fontSize + 5) / 2, width, fontSize + 5);
+      ctx.fillStyle = TEXT_TONES[entry.tone] || TEXT_TONES.info;
+      ctx.fillText(entry.text, baseX, y + 0.5);
+    }
+    ctx.restore();
   }
 
   drawPlayer(ctx, player, index, view) {

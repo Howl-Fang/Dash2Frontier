@@ -1616,6 +1616,60 @@ input:focus-visible {
   }
 }
 
+.field-log {
+  position: absolute;
+  top: 38px;
+  left: 50%;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: min(560px, 64%);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.field-note {
+  max-width: 100%;
+  padding: 5px 10px;
+  border: 1px solid var(--line-strong);
+  border-left: 2px solid var(--amber);
+  background: rgba(9, 11, 17, 0.9);
+  color: var(--ink-dim);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  line-height: 1.4;
+  text-align: center;
+  text-transform: uppercase;
+  animation: toast-in 0.22s var(--ease) both;
+}
+
+.field-note.is-buff {
+  border-left-color: var(--amber);
+  color: #ffe9a8;
+}
+
+.field-note.is-debuff {
+  border-left-color: var(--danger);
+  color: #ffb3ad;
+}
+
+.field-note.is-tradeoff {
+  border-left-color: #a88cff;
+  color: #d4c6ff;
+}
+
+.field-note.is-cyan {
+  border-left-color: var(--p1);
+  color: #b9f4ff;
+}
+
+.field-note.is-out {
+  animation: toast-out 0.26s ease both;
+}
+
 .toasts {
   position: absolute;
   top: 54px;

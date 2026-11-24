@@ -87,6 +87,7 @@ const canvas = $('game-canvas');
 const stageEl = $('stage');
 const flashEl = $('screen-flash');
 const cheatBadgeEl = $('cheat-badge');
+const fieldLogEl = $('field-log');
 
 const resultOverlay = $('result-overlay');
 const resultKicker = $('result-kicker');
@@ -286,6 +287,26 @@ function addToast(text, tone = 'gold', timeout = 3800) {
   }, timeout);
 }
 
+/** Map-wide notices live in the blank strip above the seam. */
+function addFieldLog(text, tone = 'info') {
+  if (!fieldLogEl || !text) return;
+  const node = document.createElement('div');
+  node.className = `field-note is-${tone}`;
+  node.textContent = text;
+  fieldLogEl.append(node);
+  while (fieldLogEl.children.length > 3) fieldLogEl.firstElementChild.remove();
+  window.setTimeout(() => {
+    node.classList.add('is-out');
+    window.setTimeout(() => node.remove(), 280);
+  }, 3600);
+}
+
+/** Miner-specific events float above that miner's head. */
+function notifyPlayer(index, text, tone = 'info') {
+  if (!Number.isInteger(index) || !text) return;
+  renderer.addPlayerText(index, text, tone);
+}
+
 /* ── Hidden cheat mode (triple-tap C) ───────────────────────────────── */
 
 const CHEAT_TRIPLE_WINDOW_MS = 700;
@@ -320,30 +341,9 @@ async function requestCheat(enabled) {
   }
 }
 
-function handleLuckyToast(event) {
-  const rivalName = state.players[1 - state.you]?.name || 'The rival';
-  const own = event.player === state.you;
-  const messages = {
-    soften: 'Soften — the surrounding 7×7 rock turned to soil.',
-    echo: 'Echo Form — two blocks per dig for 8s.',
-    wall: 'Wall — your whole column turned to obsidian.',
-    harden: 'Harden — the surrounding 3×3 turned to obsidian.',
-    invert: 'Invert — movement controls are reversed for 6s.',
-  };
-  const detail = messages[event.effect] || event.name || 'Lucky effect';
-  if (own) {
-    addToast(
-      `${event.good ? 'Lucky!' : 'Bad luck!'} ${detail}`,
-      event.good ? 'gold' : 'danger',
-      3400,
-    );
-  } else {
-    addToast(
-      `${rivalName} hit a lucky block: ${event.good ? 'good' : 'bad'} — ${detail}`,
-      event.good ? 'cyan' : 'gold',
-      3000,
-    );
-  }
+function handleLuckyFeedback(event) {
+  const label = `${event.good === false ? 'BAD LUCK' : 'LUCKY'} · ${(event.name || event.effect || '').toUpperCase()}`;
+  notifyPlayer(event.player, label, event.good === false ? 'debuff' : 'buff');
 }
 
 /* ── Skills ─────────────────────────────────────────────────────────── */
@@ -806,6 +806,8 @@ function resetGameView() {
   resultOverlay.classList.add('hidden');
   resultOverlay.classList.remove('is-win', 'is-loss', 'is-draw');
   toastsEl.replaceChildren();
+  if (fieldLogEl) fieldLogEl.replaceChildren();
+  renderer.clearPlayerTexts();
   state.map = null;
   state.snapshot = null;
   state.seq = -1;
@@ -1077,6 +1079,8 @@ function onGameInit(payload) {
   resultOverlay.classList.add('hidden');
   resultOverlay.classList.remove('is-win', 'is-loss', 'is-draw');
   toastsEl.replaceChildren();
+  if (fieldLogEl) fieldLogEl.replaceChildren();
+  renderer.clearPlayerTexts();
   rematchNote.textContent = '';
   rematchBtn.disabled = false;
   rematchBtn.textContent = 'Rematch';
@@ -1128,6 +1132,7 @@ function onFx(payload) {
       case 'matchStart':
         audio.matchStart();
         flashScreen();
+        addFieldLog('MINE OPEN — DRILL!', 'buff');
         break;
       case 'digStart':
         audio.digStart(own);
@@ -1155,45 +1160,35 @@ function onFx(payload) {
       case 'lucky':
         renderer.addLuckyBurst(event);
         audio.lucky(event.good);
-        handleLuckyToast(event);
+        handleLuckyFeedback(event);
         break;
       case 'cheat': {
         const rivalName = state.players[1 - state.you]?.name || 'The rival';
-        if (event.player === state.you) {
-          addToast(
-            event.enabled
-              ? 'Cheat mode on — instant drill, bedrock breaks, rival frozen.'
-              : 'Cheat mode off.',
-            event.enabled ? 'gold' : 'cyan',
-            3200,
-          );
-        } else {
-          addToast(
-            event.enabled
-              ? `${rivalName} enabled cheat mode — you are frozen in place!`
-              : `${rivalName} disabled cheat mode.`,
-            event.enabled ? 'danger' : 'gold',
-            3200,
-          );
-        }
+        addFieldLog(
+          event.enabled
+            ? event.player === state.you
+              ? 'CHEAT MODE ON — INSTANT DRILL · BEDROCK BREAKS · RIVAL FROZEN'
+              : `${rivalName.toUpperCase()} ENABLED CHEAT MODE — YOU ARE FROZEN`
+            : event.player === state.you
+              ? 'CHEAT MODE OFF'
+              : `${rivalName.toUpperCase()} DISABLED CHEAT MODE`,
+          event.enabled ? 'debuff' : 'cyan',
+        );
+        notifyPlayer(event.player, event.enabled ? 'CHEAT ON' : 'CHEAT OFF', 'gold');
         if (event.enabled) flashScreen();
         break;
       }
-      case 'cryoBurst':
+      case 'cryoBurst': {
         renderer.addCryoBurst(event);
         audio.cryoBurst(event.player === state.you, event.hit);
-        if (event.player === state.you) {
-          addToast(
-            event.hit
-              ? 'Cryo burst caught the rival — movement and drill chilled.'
-              : 'Cryo burst missed.',
-            event.hit ? 'cyan' : 'gold',
-            2400,
-          );
-        } else if (event.hit) {
-          addToast('Frost caught you — movement and drill slowed.', 'danger', 2600);
+        const victim = 1 - event.player;
+        if (event.hit) {
+          notifyPlayer(victim, 'CHILLED', 'debuff');
+        } else {
+          notifyPlayer(victim, 'CRYO MISS', 'info');
         }
         break;
+      }
       default:
         break;
     }
@@ -1202,42 +1197,27 @@ function onFx(payload) {
 
 function handleSkillFx(event) {
   const own = event.player === state.you;
-  const opponent = state.players[1 - state.you];
-  const caster = state.players[event.player] || state.players.find((p) => p?.index === event.player);
-  const casterName = caster?.name || 'Rival';
   renderer.addSkillEffect(event);
   audio.skill(event.skill, own);
   if (event.skill === 'blast' && own) flashScreen();
 
   if (event.skill === 'build') {
     const count = event.cells?.length || 0;
-    addToast(
-      own
-        ? `${count} barricade${count === 1 ? '' : 's'} placed near ${opponent?.name || 'the rival'}.`
-        : `${casterName} walled off ${count} cell${count === 1 ? '' : 's'} near you.`,
-      own ? 'cyan' : 'danger',
+    notifyPlayer(
+      event.player,
+      own ? `BUILD ×${count}` : `RIVAL WALL ×${count}`,
+      own ? 'cyan' : 'debuff',
     );
   } else if (event.skill === 'blast') {
-    addToast(
-      own
-        ? `Blast away — ${event.cells?.length || 0} blocks cleared.`
-        : `${casterName} blasted a crater.`,
-      own ? 'cyan' : 'gold',
+    notifyPlayer(
+      event.player,
+      own ? `BLAST ×${event.cells?.length || 0}` : 'RIVAL BLAST',
+      own ? 'cyan' : 'debuff',
     );
   } else if (event.skill === 'overdrive') {
-    addToast(
-      own
-        ? 'Overdrive engaged — ×1.8 drill and ×1.25 movement.'
-        : `${casterName} overclocked their drill.`,
-      own ? 'gold' : 'cyan',
-    );
+    notifyPlayer(event.player, own ? 'OVERDRIVE' : 'RIVAL OVERDRIVE', own ? 'buff' : 'debuff');
   } else if (event.skill === 'cryo') {
-    addToast(
-      own
-        ? `Cryo armed — bursting in ${((event.delayMs || 450) / 1000).toFixed(2)}s.`
-        : `${casterName} armed a frost burst near you.`,
-      own ? 'cyan' : 'danger',
-    );
+    notifyPlayer(event.player, own ? 'CRYO ARMED' : 'RIVAL CRYO', own ? 'cyan' : 'debuff');
   }
 }
 
