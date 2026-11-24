@@ -84,6 +84,7 @@ export class Game {
     this.pendingEvents = [];
     this.pendingCryo = [];
     this.lockdown = 0;
+    this.examSeq = 0;
     this.players = players.map((player, index) => this.#createPlayer(player, index));
     this.startGoalDistances = this.players.map((player) =>
       distanceToGoalZone(this.config, player.index, player.x, player.y),
@@ -851,6 +852,7 @@ export class Game {
       answers.push(question.answer);
     }
     player.exam = {
+      id: (this.examSeq += 1),
       remaining: examConfig.seconds,
       questions,
       answers,
@@ -1262,6 +1264,7 @@ export class Game {
             : null,
         exam: player.exam
           ? {
+              id: player.exam.id,
               remainingMs: Math.max(0, Math.round(player.exam.remaining * 1000)),
               questions: player.exam.questions,
             }

@@ -98,6 +98,10 @@ const flashEl = $('screen-flash');
 const cheatBadgeEl = $('cheat-badge');
 const fieldLogEl = $('field-log');
 const statusTipEl = $('status-tip');
+const examOverlay = $('exam-overlay');
+const examTimerEl = $('exam-timer');
+const examQuestionsEl = $('exam-questions');
+const examSubmitBtn = $('exam-submit');
 
 const resultOverlay = $('result-overlay');
 const resultKicker = $('result-kicker');
@@ -161,6 +165,9 @@ const state = {
   cheat: false,
   cheatPresses: [],
   hijackActive: false,
+  lockdownActive: false,
+  examId: null,
+  examAnswers: [],
   targeting: null,
   targetingHover: null,
   targetingCells: [],
@@ -823,6 +830,8 @@ function resetGameView() {
   state.cheat = false;
   state.cheatPresses = [];
   state.hijackActive = false;
+  state.lockdownActive = false;
+  hideExam();
   updateCheatBadge();
   state.wasCountdown = false;
   state.countdownValue = null;
@@ -1080,6 +1089,8 @@ function onGameInit(payload) {
   state.cheat = false;
   state.cheatPresses = [];
   state.hijackActive = false;
+  state.lockdownActive = false;
+  hideExam();
   updateSessionIdentity();
 
   hideCountdown();
@@ -1123,6 +1134,9 @@ function onSnapshot(snapshot) {
     syncDirection(true);
   }
   state.hijackActive = hijacked;
+  const locked = (snapshot.lockdownMs ?? 0) > 0;
+  if (state.lockdownActive && !locked) addFieldLog('GATES REOPENED', 'buff');
+  state.lockdownActive = locked;
   if (snapshot.phase === 'finished') {
     flushInput();
     cancelTargeting();
@@ -1130,6 +1144,7 @@ function onSnapshot(snapshot) {
   renderer.updateSnapshot(snapshot);
   if (state.targeting) updateTargetingOverlay(state.targetingHover);
   updateHud(snapshot);
+  updateExamUi(snapshot);
   updateSkillCards(snapshot);
   updateCountdown(snapshot);
   updateOfflineBanner();
@@ -1406,6 +1421,77 @@ function setupStatusTooltip() {
     hide();
   });
   window.addEventListener('blur', hide);
+}
+
+function updateExamSubmitState() {
+  const ready =
+    state.examId !== null &&
+    state.examAnswers.length > 0 &&
+    state.examAnswers.every((answer) => answer >= 0);
+  examSubmitBtn.disabled = !ready;
+  examSubmitBtn.textContent = ready ? 'Submit answers' : 'Pick one answer per sum';
+}
+
+function hideExam() {
+  if (examOverlay) examOverlay.classList.add('hidden');
+  state.examId = null;
+  state.examAnswers = [];
+}
+
+function renderExam(exam) {
+  state.examId = exam.id;
+  state.examAnswers = new Array(exam.questions.length).fill(-1);
+  examQuestionsEl.replaceChildren();
+  exam.questions.forEach((question, questionIndex) => {
+    const block = document.createElement('div');
+    block.className = 'exam-question';
+    const label = document.createElement('p');
+    label.className = 'exam-question-text';
+    label.textContent = `${questionIndex + 1}. ${question.text}`;
+    const options = document.createElement('div');
+    options.className = 'exam-options';
+    question.options.forEach((option, optionIndex) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'exam-option';
+      button.textContent = option;
+      button.addEventListener('click', () => {
+        state.examAnswers[questionIndex] = optionIndex;
+        for (const node of options.children) {
+          node.classList.toggle('is-picked', node === button);
+        }
+        updateExamSubmitState();
+      });
+      options.append(button);
+    });
+    block.append(label, options);
+    examQuestionsEl.append(block);
+  });
+  updateExamSubmitState();
+  examOverlay.classList.remove('hidden');
+}
+
+function updateExamUi(snapshot) {
+  if (!examOverlay) return;
+  const exam = snapshot.players?.[state.you]?.exam || null;
+  if (!exam || snapshot.phase !== 'playing') {
+    hideExam();
+    return;
+  }
+  if (state.examId !== exam.id) renderExam(exam);
+  examTimerEl.textContent = `${(exam.remainingMs / 1000).toFixed(1)}s`;
+}
+
+async function submitExamAnswers() {
+  if (!state.examId) return;
+  if (!state.examAnswers.every((answer) => answer >= 0)) return;
+  const answers = state.examAnswers.slice();
+  const result = await emitAck('game:examAnswer', { answers }, 3000);
+  if (!result.ok) {
+    addToast(result.message || 'Could not submit the exam.', 'danger', 2200);
+    return;
+  }
+  hideExam();
 }
 
 function updateHud(snapshot) {
@@ -1869,6 +1955,10 @@ function initUi() {
   copyCodeBtn.addEventListener('click', () => {
     audio.click();
     copyRoomCode();
+  });
+  examSubmitBtn.addEventListener('click', () => {
+    audio.unlock();
+    submitExamAnswers();
   });
 
   nameInput.addEventListener('keydown', (event) => {

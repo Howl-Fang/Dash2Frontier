@@ -758,6 +758,7 @@ export class GameRenderer {
     this.drawPlayers(ctx);
     this.drawPlayerTexts(ctx, 0);
     this.drawPlayerTexts(ctx, 1);
+    this.drawFog(ctx);
     this.drawParticles(ctx);
     this.drawMapLabels(ctx);
     ctx.restore();
@@ -811,6 +812,7 @@ export class GameRenderer {
     const depth = CONFIG.goalDepth;
     const bands = CONFIG.goalBands;
     const labelFont = Math.max(6, Math.min(9, tile * 0.34));
+    const locked = (this.snapshot?.lockdownMs ?? 0) > 0;
 
     for (const [side, index] of [
       ['left', 0],
@@ -888,6 +890,42 @@ export class GameRenderer {
             ctx.lineTo(arrowX + direction * size + direction * offset, arrowY);
             ctx.lineTo(arrowX - direction * size + direction * offset, arrowY + size);
             ctx.stroke();
+          }
+          ctx.restore();
+        }
+
+        if (locked) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(x, y, w, h);
+          ctx.clip();
+          ctx.fillStyle = 'rgba(12, 7, 9, 0.62)';
+          ctx.fillRect(x, y, w, h);
+          ctx.strokeStyle = 'rgba(255, 98, 89, 0.18)';
+          ctx.lineWidth = 1;
+          const hatch = Math.max(5, tile * 0.4);
+          for (let hy = y - w; hy < y + h; hy += hatch) {
+            ctx.beginPath();
+            ctx.moveTo(x, hy);
+            ctx.lineTo(x + w, hy + w);
+            ctx.stroke();
+          }
+          ctx.restore();
+
+          ctx.save();
+          ctx.strokeStyle = 'rgba(255, 98, 89, 0.7)';
+          ctx.lineWidth = Math.max(1, tile * 0.08);
+          ctx.setLineDash([4, 4]);
+          ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+          ctx.setLineDash([]);
+          if (tile >= 8) {
+            ctx.translate(x + w / 2, y + h / 2);
+            ctx.rotate(side === 'left' ? -Math.PI / 2 : Math.PI / 2);
+            ctx.font = `700 ${labelFont}px ${FONT_MONO}`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillStyle = 'rgba(255, 150, 140, 0.95)';
+            ctx.fillText('SEALED', 0, 0);
           }
           ctx.restore();
         }
@@ -1253,30 +1291,70 @@ export class GameRenderer {
 
   drawPlayerTexts(ctx, index) {
     const list = this.playerTexts[index];
-    if (!list || list.length === 0) return;
+    if (!list) return;
+    const player = this.snapshot?.players?.[index];
+    const qte = player?.buffs?.qte || 0;
+    const prompt = qte > 0 ? `MASH WASD ${player.thaw?.taps ?? 0}/${player.thaw?.needed ?? 8}` : null;
+    if (list.length === 0 && !prompt) return;
     const view = this.viewPositions[index];
     if (!view) return;
     const tile = this.tile;
     const fontSize = Math.max(8, Math.min(12, tile * 0.46));
+    const lineHeight = fontSize + 5;
     const baseX = this.offsetX + view.x * tile;
     const baseY = this.offsetY + view.y * tile - tile * 0.86 - 26;
     ctx.save();
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.font = `700 ${fontSize}px ${FONT_MONO}`;
+
+    const drawLine = (text, y, color, alpha) => {
+      const width = ctx.measureText(text).width + 10;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = 'rgba(7, 9, 13, 0.85)';
+      ctx.fillRect(baseX - width / 2, y - lineHeight / 2, width, lineHeight);
+      ctx.fillStyle = color;
+      ctx.fillText(text, baseX, y + 0.5);
+    };
+
+    if (prompt) {
+      const y = baseY - list.length * lineHeight;
+      drawLine(prompt, y, TEXT_TONES.cyan, 0.95);
+    }
+
     for (let i = 0; i < list.length; i += 1) {
       const entry = list[i];
       const progress = clamp(entry.life / entry.maxLife, 0, 1);
       const fadeIn = progress < 0.12 ? progress / 0.12 : 1;
       const fadeOut = progress > 0.68 ? 1 - (progress - 0.68) / 0.32 : 1;
-      const y = baseY - i * (fontSize + 5) - progress * 10;
-      const width = ctx.measureText(entry.text).width + 10;
-      ctx.globalAlpha = clamp(Math.min(fadeIn, fadeOut), 0, 1);
-      ctx.fillStyle = 'rgba(7, 9, 13, 0.85)';
-      ctx.fillRect(baseX - width / 2, y - (fontSize + 5) / 2, width, fontSize + 5);
-      ctx.fillStyle = TEXT_TONES[entry.tone] || TEXT_TONES.info;
-      ctx.fillText(entry.text, baseX, y + 0.5);
+      const y = baseY - i * lineHeight - progress * 10;
+      drawLine(
+        entry.text,
+        y,
+        TEXT_TONES[entry.tone] || TEXT_TONES.info,
+        clamp(Math.min(fadeIn, fadeOut), 0, 1),
+      );
     }
+    ctx.restore();
+  }
+
+  drawFog(ctx) {
+    const me = this.snapshot?.players?.[this.you];
+    if (!me || !(me.buffs?.fog > 0)) return;
+    const view = this.viewPositions[this.you];
+    if (!view || this.mapW <= 0) return;
+    const tile = this.tile;
+    const cx = this.offsetX + view.x * tile;
+    const cy = this.offsetY + view.y * tile;
+    const outer = Math.max(tile * 5.6, 96);
+    const inner = tile * 2.2;
+    const gradient = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
+    gradient.addColorStop(0, 'rgba(4, 6, 10, 0)');
+    gradient.addColorStop(0.55, 'rgba(4, 6, 10, 0.62)');
+    gradient.addColorStop(1, 'rgba(4, 6, 10, 0.95)');
+    ctx.save();
+    ctx.fillStyle = gradient;
+    ctx.fillRect(this.offsetX, this.offsetY, this.mapW, this.mapH);
     ctx.restore();
   }
 
@@ -1318,11 +1396,13 @@ export class GameRenderer {
       }
     }
 
-    if (player.buffs?.freeze > 0) {
-      // A hard cheat-mode freeze: a red cage with frost shards, not the blue
-      // Cryo slow aura.
+    const hardFrozen = player.buffs?.freeze > 0;
+    const qteFrozen = player.buffs?.qte > 0;
+    if (hardFrozen || qteFrozen) {
+      // A hard freeze cage. Red for cheat freeze, ice blue for the QTE freeze.
+      const tone = qteFrozen ? '150, 238, 255' : '255, 120, 96';
       const cage = 0.55 + 0.25 * Math.sin(this.time * 6);
-      ctx.strokeStyle = `rgba(255, 120, 96, ${cage})`;
+      ctx.strokeStyle = `rgba(${tone}, ${cage})`;
       ctx.lineWidth = Math.max(1, tile * 0.06);
       ctx.setLineDash([3, 3]);
       ctx.beginPath();
