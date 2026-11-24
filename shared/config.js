@@ -144,52 +144,281 @@ export const SKILLS = Object.freeze({
 
 export const SKILL_ORDER = Object.freeze(['build', 'blast', 'overdrive', 'cryo']);
 
-// Lucky blocks roll one of these effects when they are mined. `radius` is in
-// cells around the block (1 = 3×3, 3 = 7×7); timed buffs live on the player.
-export const LUCKY_EFFECTS = Object.freeze({
-  soften: {
-    id: 'soften',
-    name: 'Soften',
-    good: true,
-    radius: 3,
-    blurb: '7×7 rock around the block turns to soil.',
-  },
+// Lucky blocks roll one of these effects. `kind` decides who usually receives
+// it; terrain effects rewrite the map around the block instead of a player.
+export const EFFECTS = Object.freeze({
   echo: {
     id: 'echo',
     name: 'Echo Form',
-    good: true,
+    kind: 'buff',
+    icon: '≫',
     duration: 8,
-    blurb: 'Two blocks break per dig for 8s.',
+    description: 'Each dig breaks two blocks in a line for 8s.',
   },
-  wall: {
-    id: 'wall',
-    name: 'Wall',
-    good: true,
-    blurb: 'Your whole column turns to obsidian, except your cell.',
+  reject: {
+    id: 'reject',
+    name: 'Reject',
+    kind: 'buff',
+    icon: '⛨',
+    duration: 12,
+    description: 'Debuffs cannot be applied for 12s.',
   },
-  harden: {
-    id: 'harden',
-    name: 'Harden',
-    good: false,
-    radius: 1,
-    blurb: '3×3 rock around the block turns to obsidian.',
+  luck: {
+    id: 'luck',
+    name: 'Luck',
+    kind: 'buff',
+    icon: '☘',
+    charges: 2,
+    description: 'The next 2 lucky blocks you mine are guaranteed buffs.',
   },
   invert: {
     id: 'invert',
     name: 'Invert',
-    good: false,
+    kind: 'debuff',
+    icon: '⇅',
     duration: 6,
-    blurb: 'Movement controls are reversed for 6s.',
+    description: 'Movement and facing are reversed for 6s.',
+  },
+  fog: {
+    id: 'fog',
+    name: 'Fog',
+    kind: 'debuff',
+    icon: '◌',
+    duration: 8,
+    description: 'Vision is limited to the area around you for 8s.',
+  },
+  drain: {
+    id: 'drain',
+    name: 'Drain',
+    kind: 'debuff',
+    icon: '⌁',
+    description: 'Instantly drains all energy.',
+  },
+  lag: {
+    id: 'lag',
+    name: 'Lag',
+    kind: 'debuff',
+    icon: '⏳',
+    duration: 10,
+    cooldownMultiplier: 1.8,
+    description: 'Skill cooldowns are 1.8× longer for 10s.',
+  },
+  freeze: {
+    id: 'freeze',
+    name: 'Freeze',
+    kind: 'debuff',
+    icon: '✳',
+    duration: 6,
+    taps: 8,
+    description: 'Frozen in place. Mash direction keys 8 times to thaw.',
+  },
+  misfortune: {
+    id: 'misfortune',
+    name: 'Misfortune',
+    kind: 'debuff',
+    icon: '☠',
+    duration: 12,
+    description: 'Lucky blocks you mine only debuff you for 12s.',
+  },
+  lockdown: {
+    id: 'lockdown',
+    name: 'Lockdown',
+    kind: 'debuff',
+    icon: '⛔',
+    duration: 8,
+    description: 'Both target gates are sealed for 8s.',
+  },
+  hijack: {
+    id: 'hijack',
+    name: 'Hijack',
+    kind: 'tradeoff',
+    icon: '↠',
+    duration: 10,
+    mineMultiplier: 3,
+    description: 'Locked in one direction for 10s, but drill ×3.',
+  },
+  exam: {
+    id: 'exam',
+    name: 'Exam',
+    kind: 'tradeoff',
+    icon: '∑',
+    description: 'Solve 3 sums in 10s: pass drill ×2, fail drill ×0.5.',
+  },
+  balance: {
+    id: 'balance',
+    name: 'Balance',
+    kind: 'tradeoff',
+    icon: '⚖',
+    duration: 20,
+    behindMultiplier: 3,
+    aheadDivisor: 3,
+    description: 'Behind on progress: drill ×3, ahead: ÷3, for 20s.',
+  },
+  mundane: {
+    id: 'mundane',
+    name: 'Mundane',
+    kind: 'tradeoff',
+    icon: '∅',
+    duration: 15,
+    description: 'Immune to all buffs and debuffs for 15s.',
+  },
+  soften: {
+    id: 'soften',
+    name: 'Soften',
+    kind: 'terrain',
+    good: true,
+    icon: '⌁',
+    radius: 3,
+    description: '7×7 rock around the block turns to soil.',
+  },
+  wall: {
+    id: 'wall',
+    name: 'Wall',
+    kind: 'terrain',
+    good: true,
+    icon: '▥',
+    description: 'Your whole column turns to obsidian, except your cell.',
+  },
+  harden: {
+    id: 'harden',
+    name: 'Harden',
+    kind: 'terrain',
+    good: false,
+    icon: '▦',
+    radius: 1,
+    description: '3×3 rock around the block turns to obsidian.',
   },
 });
 
-export const LUCKY_EFFECT_ORDER = Object.freeze([
-  'soften',
-  'echo',
-  'wall',
-  'harden',
-  'invert',
+// Player-visible status catalogue. `buffKey` maps a status to the timer stored
+// on the player; skill buffs (Overdrive/Cryo) and cheat freeze live here too so
+// the HUD can render every active effect with one icon set.
+export const STATUS_DEFS = Object.freeze({
+  overdrive: {
+    id: 'overdrive',
+    name: 'Overdrive',
+    icon: '⚡',
+    kind: 'buff',
+    description: 'Drill ×1.8 and movement ×1.25.',
+  },
+  echo: { id: 'echo', name: 'Echo Form', icon: '≫', kind: 'buff' },
+  reject: { id: 'reject', name: 'Reject', icon: '⛨', kind: 'buff' },
+  luck: {
+    id: 'luck',
+    name: 'Luck',
+    icon: '☘',
+    kind: 'buff',
+    description: 'The next lucky blocks you mine are guaranteed buffs.',
+  },
+  examPass: {
+    id: 'examPass',
+    name: 'Exam Passed',
+    icon: '✓',
+    kind: 'buff',
+    description: 'Drill ×2 after passing the exam.',
+  },
+  cryo: {
+    id: 'cryo',
+    name: 'Chilled',
+    icon: '❄',
+    kind: 'debuff',
+    description: 'Cryo slow: drill ×0.45 and movement ×0.6.',
+  },
+  invert: { id: 'invert', name: 'Invert', icon: '⇅', kind: 'debuff' },
+  fog: { id: 'fog', name: 'Fog', icon: '◌', kind: 'debuff' },
+  lag: { id: 'lag', name: 'Lag', icon: '⏳', kind: 'debuff' },
+  qte: {
+    id: 'qte',
+    name: 'Frozen',
+    icon: '✳',
+    kind: 'debuff',
+    description: 'Cannot move or drill. Mash direction keys to break free.',
+  },
+  misfortune: {
+    id: 'misfortune',
+    name: 'Misfortune',
+    icon: '☠',
+    kind: 'debuff',
+  },
+  examFail: {
+    id: 'examFail',
+    name: 'Exam Failed',
+    icon: '✗',
+    kind: 'debuff',
+    description: 'Drill ×0.5 after failing the exam.',
+  },
+  freeze: {
+    id: 'freeze',
+    name: 'Hard Frozen',
+    icon: '❄',
+    kind: 'debuff',
+    description: 'Cheat-mode freeze: cannot move or drill.',
+  },
+  hijack: { id: 'hijack', name: 'Hijack', icon: '↠', kind: 'tradeoff' },
+  exam: {
+    id: 'exam',
+    name: 'Exam',
+    icon: '∑',
+    kind: 'tradeoff',
+    description: 'Answer 3 sums before the timer runs out.',
+  },
+  balance: { id: 'balance', name: 'Balance', icon: '⚖', kind: 'tradeoff' },
+  mundane: { id: 'mundane', name: 'Mundane', icon: '∅', kind: 'tradeoff' },
+});
+
+// Weighted roll table. Weights are tuned so buffs, debuffs, tradeoffs and
+// terrain each show up regularly.
+export const LUCKY_ROLL_TABLE = Object.freeze([
+  { effect: 'echo', weight: 16 },
+  { effect: 'reject', weight: 7 },
+  { effect: 'luck', weight: 10 },
+  { effect: 'invert', weight: 8 },
+  { effect: 'fog', weight: 10 },
+  { effect: 'drain', weight: 8 },
+  { effect: 'lag', weight: 8 },
+  { effect: 'freeze', weight: 8 },
+  { effect: 'misfortune', weight: 6 },
+  { effect: 'lockdown', weight: 6 },
+  { effect: 'hijack', weight: 9 },
+  { effect: 'exam', weight: 8 },
+  { effect: 'balance', weight: 7 },
+  { effect: 'mundane', weight: 5 },
+  { effect: 'soften', weight: 10 },
+  { effect: 'wall', weight: 8 },
+  { effect: 'harden', weight: 10 },
 ]);
+
+export const LUCKY_BUFF_POOL = Object.freeze(['echo', 'reject', 'luck']);
+export const LUCKY_DEBUFF_POOL = Object.freeze([
+  'invert',
+  'fog',
+  'drain',
+  'lag',
+  'freeze',
+  'misfortune',
+  'lockdown',
+]);
+
+const LUCKY_ROLL_TOTAL = LUCKY_ROLL_TABLE.reduce((sum, entry) => sum + entry.weight, 0);
+
+/** Map a 0–1 roll to one entry of the weighted table. */
+export function luckyEffectForRoll(roll) {
+  const value = Number.isFinite(roll) ? Math.min(0.999999, Math.max(0, roll)) : 0;
+  const cursor = value * LUCKY_ROLL_TOTAL;
+  let acc = 0;
+  for (const entry of LUCKY_ROLL_TABLE) {
+    acc += entry.weight;
+    if (cursor < acc) return entry.effect;
+  }
+  return LUCKY_ROLL_TABLE[LUCKY_ROLL_TABLE.length - 1].effect;
+}
+
+/** Pick one entry of a pool from a 0–1 roll. */
+export function pickFromPool(pool, roll) {
+  if (!pool || pool.length === 0) return null;
+  const value = Number.isFinite(roll) ? Math.min(0.999999, Math.max(0, roll)) : 0;
+  return pool[Math.floor(value * pool.length)];
+}
 
 export const CONFIG = Object.freeze({
   port: 8000,
@@ -228,6 +457,16 @@ export const CONFIG = Object.freeze({
   // Hidden cheat mode (triple-tap C). Freezing is a hard immobilise, not Cryo.
   cheat: Object.freeze({
     freezeSeconds: 6,
+  }),
+  // Lucky-block debuffs mostly hit the rival; this is the chance to hit self.
+  luckySelfDebuffChance: 0.2,
+  exam: Object.freeze({
+    seconds: 10,
+    questions: 3,
+    passDuration: 20,
+    failDuration: 20,
+    passMultiplier: 2,
+    failMultiplier: 0.5,
   }),
   map: Object.freeze({
     bedrockChance: 0.075,

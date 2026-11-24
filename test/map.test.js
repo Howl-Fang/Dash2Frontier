@@ -169,6 +169,11 @@ test('lucky blocks spawn only in the top and bottom stretches and stay symmetric
       }
     }
     assert.ok(lucky.length > 0, `seed ${seed} should seed lucky blocks`);
+    assert.equal(
+      lucky.length,
+      CONFIG.map.luckyCount * 2,
+      `seed ${seed} should have every lucky pair placed`,
+    );
     assert.equal(lucky.length % 2, 0, 'lucky blocks are mirrored in pairs');
     for (const [col, row] of lucky) {
       const inTop = row >= 1 && row <= 6;

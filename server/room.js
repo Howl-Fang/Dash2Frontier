@@ -250,6 +250,42 @@ export class RoomManager {
     return room.game.setCheat(player.index, enabled);
   }
 
+  tapThaw(socket) {
+    const context = this.#contextForSocket(socket);
+    if (!context) {
+      return { ok: false, error: 'room', message: 'You are not in a room.' };
+    }
+    const { room, player } = context;
+    if (!room.game) {
+      return { ok: false, error: 'game', message: 'The match is not running.' };
+    }
+    return room.game.tapThaw(player.index);
+  }
+
+  submitExam(socket, answers) {
+    const context = this.#contextForSocket(socket);
+    if (!context) {
+      return { ok: false, error: 'room', message: 'You are not in a room.' };
+    }
+    const { room, player } = context;
+    if (!room.game) {
+      return { ok: false, error: 'game', message: 'The match is not running.' };
+    }
+    return room.game.submitExam(player.index, answers);
+  }
+
+  applyDevEffect(socket, effectId, target) {
+    const context = this.#contextForSocket(socket);
+    if (!context) {
+      return { ok: false, error: 'room', message: 'You are not in a room.' };
+    }
+    const { room, player } = context;
+    if (!room.game) {
+      return { ok: false, error: 'game', message: 'The match is not running.' };
+    }
+    return room.game.applyDevEffect(player.index, effectId, target);
+  }
+
   rematch(socket) {
     const context = this.#contextForSocket(socket);
     if (!context) {

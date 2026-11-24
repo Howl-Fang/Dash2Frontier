@@ -122,6 +122,33 @@ export function createGameServer({ config = {} } = {}) {
       }
     });
 
+    socket.on('game:thaw', (payload, ack) => {
+      try {
+        callAck(ack, manager.tapThaw(socket));
+      } catch (error) {
+        console.error('game:thaw failed', error);
+        callAck(ack, { ok: false, error: 'server' });
+      }
+    });
+
+    socket.on('game:examAnswer', (payload, ack) => {
+      try {
+        callAck(ack, manager.submitExam(socket, payload?.answers));
+      } catch (error) {
+        console.error('game:examAnswer failed', error);
+        callAck(ack, { ok: false, error: 'server', message: 'Could not submit the exam.' });
+      }
+    });
+
+    socket.on('dev:effect', (payload, ack) => {
+      try {
+        callAck(ack, manager.applyDevEffect(socket, payload?.effect, payload?.target));
+      } catch (error) {
+        console.error('dev:effect failed', error);
+        callAck(ack, { ok: false, error: 'server', message: 'Could not apply that effect.' });
+      }
+    });
+
     socket.on('disconnect', () => {
       manager.handleDisconnect(socket);
     });

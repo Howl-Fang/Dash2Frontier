@@ -1,4 +1,13 @@
-import { BLOCK, BLOCK_TYPES, CONFIG, SKILLS, SKILL_ORDER, isGoalRow } from '/shared/config.js';
+import {
+  BLOCK,
+  BLOCK_TYPES,
+  CONFIG,
+  EFFECTS,
+  SKILLS,
+  SKILL_ORDER,
+  STATUS_DEFS,
+  isGoalRow,
+} from '/shared/config.js';
 import { GameAudio } from './audio.js';
 import { GameRenderer } from './renderer.js';
 
@@ -88,6 +97,7 @@ const stageEl = $('stage');
 const flashEl = $('screen-flash');
 const cheatBadgeEl = $('cheat-badge');
 const fieldLogEl = $('field-log');
+const statusTipEl = $('status-tip');
 
 const resultOverlay = $('result-overlay');
 const resultKicker = $('result-kicker');
@@ -150,6 +160,7 @@ const state = {
   lastBreakSoundAt: 0,
   cheat: false,
   cheatPresses: [],
+  hijackActive: false,
   targeting: null,
   targetingHover: null,
   targetingCells: [],
@@ -339,11 +350,6 @@ async function requestCheat(enabled) {
   if (!result.ok) {
     addToast(result.message || 'Cheat mode failed.', 'danger', 2200);
   }
-}
-
-function handleLuckyFeedback(event) {
-  const label = `${event.good === false ? 'BAD LUCK' : 'LUCKY'} · ${(event.name || event.effect || '').toUpperCase()}`;
-  notifyPlayer(event.player, label, event.good === false ? 'debuff' : 'buff');
 }
 
 /* ── Skills ─────────────────────────────────────────────────────────── */
@@ -816,6 +822,7 @@ function resetGameView() {
   state.awaitingRematch = false;
   state.cheat = false;
   state.cheatPresses = [];
+  state.hijackActive = false;
   updateCheatBadge();
   state.wasCountdown = false;
   state.countdownValue = null;
@@ -1072,6 +1079,7 @@ function onGameInit(payload) {
   state.rematchReady = [false, false];
   state.cheat = false;
   state.cheatPresses = [];
+  state.hijackActive = false;
   updateSessionIdentity();
 
   hideCountdown();
@@ -1107,6 +1115,14 @@ function onSnapshot(snapshot) {
   state.phase = snapshot.phase;
   state.cheat = Boolean(snapshot.players?.[state.you]?.cheat);
   updateCheatBadge();
+  const hijacked = (snapshot.players?.[state.you]?.buffs?.hijack ?? 0) > 0;
+  if (state.hijackActive && !hijacked) {
+    // The server ignored our inputs while Hijack was active; resend what we
+    // are actually holding so movement does not stick to the locked direction.
+    state.sentDir = null;
+    syncDirection(true);
+  }
+  state.hijackActive = hijacked;
   if (snapshot.phase === 'finished') {
     flushInput();
     cancelTargeting();
@@ -1157,10 +1173,51 @@ function onFx(payload) {
       case 'skill':
         handleSkillFx(event);
         break;
-      case 'lucky':
-        renderer.addLuckyBurst(event);
-        audio.lucky(event.good);
-        handleLuckyFeedback(event);
+      case 'effect': {
+        const target = Number.isInteger(event.target) ? event.target : event.player;
+        const tone =
+          event.kind === 'buff'
+            ? 'buff'
+            : event.kind === 'debuff'
+              ? 'debuff'
+              : event.kind === 'tradeoff'
+                ? 'tradeoff'
+                : 'info';
+        const label = (event.name || EFFECTS[event.effect]?.name || 'EFFECT').toUpperCase();
+        if (event.kind === 'terrain') {
+          renderer.addLuckyBurst(event);
+          audio.lucky(Boolean(event.good));
+          notifyPlayer(event.player, label, event.good ? 'buff' : 'debuff');
+        } else if (event.blocked) {
+          notifyPlayer(target, `${label} RESISTED`, 'info');
+          audio.error();
+        } else {
+          audio.lucky(event.kind === 'buff');
+          notifyPlayer(target, label, tone);
+          if (event.effect === 'lockdown') {
+            addFieldLog('GATES SEALED — LOCKDOWN 8S', 'debuff');
+          } else if (event.effect === 'exam') {
+            addFieldLog('EXAM STARTED — 3 SUMS IN 10S', 'tradeoff');
+          }
+        }
+        break;
+      }
+      case 'thawed':
+        notifyPlayer(event.player, 'THAWED', 'cyan');
+        break;
+      case 'examStart':
+        notifyPlayer(event.player, 'EXAM!', 'tradeoff');
+        break;
+      case 'examResult':
+        notifyPlayer(
+          event.player,
+          event.passed ? 'EXAM PASSED · DRILL ×2' : 'EXAM FAILED · DRILL ×0.5',
+          event.passed ? 'buff' : 'debuff',
+        );
+        addFieldLog(
+          event.passed ? 'EXAM PASSED — DRILL ×2' : 'EXAM FAILED — DRILL ×0.5',
+          event.passed ? 'buff' : 'debuff',
+        );
         break;
       case 'cheat': {
         const rivalName = state.players[1 - state.you]?.name || 'The rival';
@@ -1263,6 +1320,94 @@ function updateHudEmpty() {
   countdownEl.classList.add('hidden');
 }
 
+const STATUS_CHIP_ORDER = [
+  'overdrive',
+  'cryo',
+  'echo',
+  'invert',
+  'fog',
+  'lag',
+  'qte',
+  'misfortune',
+  'reject',
+  'hijack',
+  'balance',
+  'mundane',
+  'examPass',
+  'examFail',
+  'freeze',
+  'luck',
+  'exam',
+];
+
+function statusChip(id, value) {
+  const def = STATUS_DEFS[id];
+  if (!def) return null;
+  const description = def.description || EFFECTS[id]?.description || '';
+  const chip = document.createElement('span');
+  chip.className = `buff-chip is-${def.kind}`;
+  chip.dataset.tip = description ? `${def.name} — ${description}` : def.name;
+  chip.title = chip.dataset.tip;
+  const icon = document.createElement('span');
+  icon.className = 'chip-icon';
+  icon.textContent = def.icon;
+  const text = document.createElement('span');
+  text.className = 'chip-value';
+  text.textContent = value;
+  chip.append(icon, text);
+  return chip;
+}
+
+function buildStatusChips(player) {
+  const chips = [];
+  const buffs = player.buffs || {};
+  for (const id of STATUS_CHIP_ORDER) {
+    if (id === 'luck') {
+      if (player.luckCharges > 0) chips.push(statusChip('luck', `×${player.luckCharges}`));
+      continue;
+    }
+    if (id === 'exam') {
+      if (player.exam) {
+        chips.push(statusChip('exam', `${Math.ceil((player.exam.remainingMs || 0) / 1000)}s`));
+      }
+      continue;
+    }
+    const remaining = buffs[id] || 0;
+    if (remaining <= 0) continue;
+    let value = `${remaining.toFixed(1)}s`;
+    if (id === 'qte' && player.thaw) {
+      value = `${remaining.toFixed(1)}s · ${player.thaw.taps}/${player.thaw.needed}`;
+    }
+    chips.push(statusChip(id, value));
+  }
+  return chips.filter(Boolean);
+}
+
+function setupStatusTooltip() {
+  if (!statusTipEl) return;
+  const hide = () => statusTipEl.classList.add('hidden');
+  document.addEventListener('pointerover', (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const chip = target?.closest('.buff-chip[data-tip]');
+    if (!chip) return;
+    statusTipEl.textContent = chip.dataset.tip || '';
+    statusTipEl.classList.remove('hidden');
+    const rect = statusTipEl.getBoundingClientRect();
+    const x = Math.min(window.innerWidth - rect.width - 10, event.clientX + 14);
+    const y = Math.min(window.innerHeight - rect.height - 10, event.clientY + 14);
+    statusTipEl.style.left = `${Math.max(10, x)}px`;
+    statusTipEl.style.top = `${Math.max(10, y)}px`;
+  });
+  document.addEventListener('pointerout', (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const chip = target?.closest('.buff-chip[data-tip]');
+    if (!chip) return;
+    if (event.relatedTarget instanceof Node && chip.contains(event.relatedTarget)) return;
+    hide();
+  });
+  window.addEventListener('blur', hide);
+}
+
 function updateHud(snapshot) {
   const players = snapshot.players || [];
   for (let index = 0; index < 2; index += 1) {
@@ -1281,37 +1426,7 @@ function updateHud(snapshot) {
       Math.max(0, ((player.energy || 0) / CONFIG.energy.max) * 100),
     )}%`;
 
-    const chips = [];
-    if (player.buffs?.overdrive > 0) {
-      const chip = document.createElement('span');
-      chip.className = 'buff-chip is-boost';
-      chip.textContent = `Boost ${player.buffs.overdrive.toFixed(1)}s`;
-      chips.push(chip);
-    }
-    if (player.buffs?.cryo > 0) {
-      const chip = document.createElement('span');
-      chip.className = 'buff-chip is-slow';
-      chip.textContent = `Chill ${player.buffs.cryo.toFixed(1)}s`;
-      chips.push(chip);
-    }
-    if (player.buffs?.echo > 0) {
-      const chip = document.createElement('span');
-      chip.className = 'buff-chip is-echo';
-      chip.textContent = `Echo ${player.buffs.echo.toFixed(1)}s`;
-      chips.push(chip);
-    }
-    if (player.buffs?.invert > 0) {
-      const chip = document.createElement('span');
-      chip.className = 'buff-chip is-invert';
-      chip.textContent = `Invert ${player.buffs.invert.toFixed(1)}s`;
-      chips.push(chip);
-    }
-    if (player.buffs?.freeze > 0) {
-      const chip = document.createElement('span');
-      chip.className = 'buff-chip is-frozen';
-      chip.textContent = `Frozen ${player.buffs.freeze.toFixed(1)}s`;
-      chips.push(chip);
-    }
+    const chips = buildStatusChips(player);
     card.buffs.replaceChildren(...chips);
   }
 
@@ -1353,8 +1468,12 @@ function updateStatusLine(snapshot) {
     statusLine.textContent = 'DRILLS LOCKED';
   } else if (snapshot.phase === 'finished') {
     statusLine.textContent = 'MATCH OVER';
+  } else if (me?.buffs?.qte > 0) {
+    statusLine.textContent = `FROZEN — MASH DIRECTION KEYS ${me.thaw?.taps ?? 0}/${me.thaw?.needed ?? 8}`;
   } else if (me?.buffs?.freeze > 0) {
     statusLine.textContent = 'FROZEN IN PLACE — CANNOT MOVE OR DRILL';
+  } else if (me?.buffs?.hijack > 0) {
+    statusLine.textContent = 'HIJACKED — DIRECTION LOCKED · DRILL ×3';
   } else if (me?.cheat) {
     statusLine.textContent = 'CHEAT MODE — INSTANT DRILL · BEDROCK BREAKS';
   } else if (opponent?.connected === false) {
@@ -1621,6 +1740,13 @@ function onKeyDown(event) {
     if (state.phase !== 'playing' && state.phase !== 'countdown') return;
     event.preventDefault();
     if (event.repeat) return;
+    if (
+      state.phase === 'playing' &&
+      (state.snapshot?.players?.[state.you]?.buffs?.qte ?? 0) > 0
+    ) {
+      // QTE thaw: every fresh direction tap chips away at the freeze.
+      if (socket?.connected) socket.emit('game:thaw', {});
+    }
     if (state.phase === 'countdown') {
       if (state.connected && !state.pressedKeys.includes(event.code)) {
         state.pressedKeys.push(event.code);
@@ -1710,6 +1836,7 @@ async function copyRoomCode() {
 function initUi() {
   buildSkillCards();
   setupMuteButton();
+  setupStatusTooltip();
   updateConnectionStatus();
   updateHudEmpty();
   if (seamSizeEl) seamSizeEl.textContent = `SHARED SEAM / ${CONFIG.cols} × ${CONFIG.rows}`;

@@ -461,15 +461,16 @@ test('a lucky block digs quickly and Soften turns a 7×7 patch to soil', () => {
   set(map, 0, 13, BLOCK.EMPTY);
   set(map, 1, 13, BLOCK.LUCKY);
 
-  const game = luckyGame({ map });
+  const game = luckyGame({ map, random: () => 0.85 });
   const player = game.getPlayer(0);
   game.setDirection(0, 'right');
   advance(game, 0.35);
 
   assert.equal(get(game, 1, 13), BLOCK.EMPTY);
-  const lucky = game.takeEvents().find((event) => event.type === 'lucky');
+  const lucky = game.takeEvents().find((event) => event.type === 'effect');
   assert.ok(lucky);
   assert.equal(lucky.effect, 'soften');
+  assert.equal(lucky.kind, 'terrain');
   assert.equal(lucky.good, true);
   assert.equal(get(game, 2, 14), BLOCK.SOIL);
   // Baseline columns are never rewritten by a gamble.
@@ -484,7 +485,7 @@ test('Echo Form breaks two blocks in a single dig', () => {
   set(map, 3, 13, BLOCK.GRANITE);
   set(map, 4, 13, BLOCK.GRANITE);
 
-  const game = luckyGame({ map, random: () => 0.25 });
+  const game = luckyGame({ map, random: () => 0.05 });
   const player = game.getPlayer(0);
   game.setDirection(0, 'right');
   advance(game, 0.4);
@@ -510,13 +511,14 @@ test('Harden turns the surrounding 3×3 into obsidian', () => {
   set(map, 0, 13, BLOCK.EMPTY);
   set(map, 1, 13, BLOCK.LUCKY);
 
-  const game = luckyGame({ map, random: () => 0.65 });
+  const game = luckyGame({ map, random: () => 0.97 });
   game.setDirection(0, 'right');
   advance(game, 0.4);
 
-  const lucky = game.takeEvents().find((event) => event.type === 'lucky');
+  const lucky = game.takeEvents().find((event) => event.type === 'effect');
   assert.ok(lucky);
   assert.equal(lucky.effect, 'harden');
+  assert.equal(lucky.kind, 'terrain');
   assert.equal(lucky.good, false);
   assert.equal(get(game, 2, 14), BLOCK.OBSIDIAN);
   assert.equal(get(game, 0, 12), BLOCK.SOIL);
@@ -526,14 +528,15 @@ test('Wall turns the miner column into obsidian except their own cell', () => {
   const map = makeMap();
   set(map, 2, 13, BLOCK.LUCKY);
 
-  const game = luckyGame({ map, random: () => 0.45 });
+  const game = luckyGame({ map, random: () => 0.9 });
   const player = game.getPlayer(0);
   game.setDirection(0, 'right');
   assert.ok(advanceUntil(game, () => get(game, 2, 13) === BLOCK.EMPTY, 3));
 
-  const lucky = game.takeEvents().find((event) => event.type === 'lucky');
+  const lucky = game.takeEvents().find((event) => event.type === 'effect');
   assert.ok(lucky);
   assert.equal(lucky.effect, 'wall');
+  assert.equal(lucky.kind, 'terrain');
   assert.equal(Math.floor(player.x), 1);
   assert.equal(get(game, 1, 5), BLOCK.OBSIDIAN);
   assert.equal(get(game, 1, 12), BLOCK.OBSIDIAN);
@@ -545,14 +548,17 @@ test('Invert reverses movement and facing for a timed window', () => {
   const map = makeMap();
   set(map, 2, 13, BLOCK.LUCKY);
 
-  const game = luckyGame({ map, random: () => 0.9 });
+  const rolls = [0.25, 0.1];
+  const game = luckyGame({ map, random: () => rolls.shift() ?? 0.5 });
   const player = game.getPlayer(0);
   game.setDirection(0, 'right');
   assert.ok(advanceUntil(game, () => player.buffs.invert > 0, 3));
 
-  const lucky = game.takeEvents().find((event) => event.type === 'lucky');
+  const lucky = game.takeEvents().find((event) => event.type === 'effect');
   assert.ok(lucky);
   assert.equal(lucky.effect, 'invert');
+  assert.equal(lucky.kind, 'debuff');
+  assert.equal(lucky.target, 0);
 
   const xBefore = player.x;
   advance(game, 0.15);
@@ -600,4 +606,226 @@ test('turning cheat mode off restores normal mining rules', () => {
   advance(game, 0.5);
   assert.equal(get(game, 1, 13), BLOCK.BEDROCK);
   assert.equal(game.getPlayer(0).mining, null);
+});
+
+/* ── Buffs, debuffs and tradeoffs ───────────────────────────────────── */
+
+test('lucky debuffs usually land on the rival', () => {
+  const map = makeMap();
+  set(map, 1, 13, BLOCK.LUCKY);
+  const game = luckyGame({ map, random: () => 0.25 });
+  game.setDirection(0, 'right');
+  advance(game, 0.4);
+
+  const effect = game.takeEvents().find((event) => event.type === 'effect');
+  assert.ok(effect);
+  assert.equal(effect.effect, 'invert');
+  assert.equal(effect.kind, 'debuff');
+  assert.equal(effect.target, 1);
+  assert.ok(game.getPlayer(1).buffs.invert > 0);
+  assert.equal(game.getPlayer(0).buffs.invert, 0);
+});
+
+test('Luck guarantees buffs for the next two lucky blocks', () => {
+  const map = makeMap();
+  set(map, 1, 13, BLOCK.LUCKY);
+  set(map, 2, 13, BLOCK.GRANITE);
+  set(map, 3, 13, BLOCK.LUCKY);
+
+  const game = luckyGame({ map, random: () => 0 });
+  const player = game.getPlayer(0);
+  assert.equal(game.applyDevEffect(0, 'luck', 'self').ok, true);
+  assert.equal(player.luckCharges, 2);
+
+  game.setDirection(0, 'right');
+  advance(game, 0.4);
+  const first = game.takeEvents().find((event) => event.type === 'effect');
+  assert.ok(first);
+  assert.equal(first.kind, 'buff');
+  assert.equal(first.target, 0);
+  assert.equal(player.luckCharges, 1);
+
+  assert.ok(advanceUntil(game, () => get(game, 3, 13) === BLOCK.EMPTY, 6));
+  const second = game.takeEvents().find((event) => event.type === 'effect');
+  assert.ok(second);
+  assert.equal(second.kind, 'buff');
+  assert.equal(second.target, 0);
+  assert.equal(player.luckCharges, 0);
+});
+
+test('Misfortune forces lucky results to debuff its owner', () => {
+  const map = makeMap();
+  set(map, 1, 13, BLOCK.LUCKY);
+
+  const game = luckyGame({ map, random: () => 0 });
+  assert.equal(game.applyDevEffect(0, 'misfortune', 'self').ok, true);
+  game.takeEvents();
+
+  game.setDirection(0, 'right');
+  advance(game, 0.4);
+  const effect = game.takeEvents().find((event) => event.type === 'effect');
+  assert.ok(effect);
+  assert.equal(effect.kind, 'debuff');
+  assert.equal(effect.target, 0);
+  assert.equal(effect.effect, 'invert');
+  assert.ok(game.getPlayer(0).buffs.invert > 0);
+});
+
+test('Reject blocks debuffs and Mundane blocks both directions', () => {
+  const game = newGame();
+  const player = game.getPlayer(0);
+  player.energy = 80;
+
+  assert.equal(game.applyDevEffect(0, 'reject', 'self').ok, true);
+  const rejected = game.applyDevEffect(0, 'drain', 'self');
+  assert.equal(rejected.blocked, true);
+  assert.equal(player.energy, 80);
+
+  const game2 = newGame();
+  assert.equal(game2.applyDevEffect(0, 'mundane', 'self').ok, true);
+  assert.equal(game2.applyDevEffect(0, 'echo', 'self').blocked, true);
+  assert.equal(game2.applyDevEffect(0, 'invert', 'self').blocked, true);
+  assert.equal(game2.getPlayer(0).buffs.echo, 0);
+});
+
+test('Drain empties all energy instantly', () => {
+  const game = newGame();
+  game.getPlayer(0).energy = 90;
+  assert.equal(game.applyDevEffect(1, 'drain', 'rival').ok, true);
+  assert.equal(game.getPlayer(0).energy, 0);
+});
+
+test('Lag lengthens skill cooldowns', () => {
+  const game = newGame();
+  assert.equal(game.applyDevEffect(0, 'lag', 'self').ok, true);
+  assert.equal(game.castSkill(0, 'overdrive', {}).ok, true);
+  assert.ok(game.getPlayer(0).cooldowns.overdrive > 18 * 1.7);
+});
+
+test('QTE freeze immobilises until enough direction taps thaw it', () => {
+  const game = newGame();
+  const victim = game.getPlayer(1);
+  assert.equal(game.applyDevEffect(0, 'freeze', 'rival').ok, true);
+  assert.ok(victim.buffs.qte > 0);
+  assert.equal(victim.thawNeeded, 8);
+
+  game.setDirection(1, 'left');
+  advance(game, 1);
+  assert.equal(victim.x, 11.5);
+  assert.ok(game.snapshot().players[1].thaw);
+
+  for (let i = 0; i < 7; i += 1) game.tapThaw(1);
+  advance(game, 0.1);
+  assert.equal(victim.x, 11.5);
+  assert.equal(game.tapThaw(1).thawed, true);
+  advance(game, 0.2);
+  assert.ok(victim.x < 11.5);
+});
+
+test('QTE freeze also expires on its own timer', () => {
+  const game = newGame();
+  const victim = game.getPlayer(1);
+  assert.equal(game.applyDevEffect(0, 'freeze', 'rival').ok, true);
+  game.setDirection(1, 'left');
+  advance(game, 6.2);
+  assert.equal(victim.buffs.qte, 0);
+  assert.ok(victim.x < 11.5);
+});
+
+test('Hijack locks direction while the auto-drill keeps running', () => {
+  const game = newGame();
+  const player = game.getPlayer(0);
+  assert.equal(game.applyDevEffect(0, 'hijack', 'self').ok, true);
+  assert.equal(player.heldDir, 'right');
+
+  assert.equal(game.setDirection(0, 'left').locked, true);
+  assert.equal(player.heldDir, 'right');
+  advance(game, 0.3);
+  assert.ok(player.x > 0.5);
+
+  advance(game, 10.2);
+  assert.equal(player.buffs.hijack, 0);
+  game.setDirection(0, 'left');
+  assert.equal(player.heldDir, 'left');
+});
+
+test('Balance speeds up the trailing miner and slows the leader', () => {
+  const trailingMap = makeMap();
+  set(trailingMap, 1, 13, BLOCK.GRANITE);
+  const trailing = newGame({ map: trailingMap });
+  trailing.getPlayer(1).x = 6.5;
+  assert.equal(trailing.applyDevEffect(0, 'balance', 'self').ok, true);
+  trailing.setDirection(0, 'right');
+  advance(trailing, 1);
+  assert.equal(get(trailing, 1, 13), BLOCK.EMPTY);
+
+  const leaderMap = makeMap();
+  set(leaderMap, 7, 13, BLOCK.GRANITE);
+  const leader = newGame({ map: leaderMap });
+  leader.getPlayer(0).x = 6.5;
+  assert.equal(leader.applyDevEffect(0, 'balance', 'self').ok, true);
+  leader.setDirection(0, 'right');
+  advance(leader, 1);
+  assert.equal(get(leader, 7, 13), BLOCK.GRANITE);
+});
+
+test('Exam rewards correct answers and punishes wrong ones', () => {
+  const game = newGame();
+  assert.equal(game.applyDevEffect(0, 'exam', 'self').ok, true);
+  const exam = game.getPlayer(0).exam;
+  assert.ok(exam);
+  assert.equal(exam.questions.length, 3);
+  assert.equal(exam.questions[0].options.length, 4);
+
+  const snapshot = game.snapshot();
+  assert.equal(snapshot.players[0].exam.questions.length, 3);
+  assert.equal(snapshot.players[0].exam.questions[0].options.length, 4);
+  assert.equal(snapshot.players[0].exam.answers, undefined);
+
+  const passed = game.submitExam(0, exam.answers.slice());
+  assert.equal(passed.ok, true);
+  assert.equal(passed.passed, true);
+  assert.equal(game.getPlayer(0).exam, null);
+  assert.ok(game.getPlayer(0).buffs.examPass > 0);
+  assert.ok(game.takeEvents().some((event) => event.type === 'examResult' && event.passed));
+
+  const failing = newGame();
+  assert.equal(failing.applyDevEffect(0, 'exam', 'self').ok, true);
+  const wrong = failing.getPlayer(0).exam.answers.map((answer) => (answer + 1) % 4);
+  const failed = failing.submitExam(0, wrong);
+  assert.equal(failed.passed, false);
+  assert.ok(failing.getPlayer(0).buffs.examFail > 0);
+});
+
+test('Exam times out into the failure debuff', () => {
+  const game = newGame();
+  assert.equal(game.applyDevEffect(0, 'exam', 'self').ok, true);
+  advance(game, 10.5);
+  assert.equal(game.getPlayer(0).exam, null);
+  assert.ok(game.getPlayer(0).buffs.examFail > 0);
+});
+
+test('Lockdown seals both gates and blocks entry until it expires', () => {
+  const game = newGame();
+  assert.equal(game.applyDevEffect(0, 'lockdown', 'self').ok, true);
+  assert.ok(game.lockdown > 0);
+  assert.ok(game.snapshot().lockdownMs > 0);
+
+  const player = game.getPlayer(0);
+  player.x = 10.5;
+  player.y = 3.5;
+  player.lastCol = 10;
+  player.lastRow = 3;
+  game.setDirection(0, 'right');
+  advance(game, 0.5);
+  assert.ok(player.x < 11);
+  assert.equal(game.phase, 'playing');
+
+  player.x = 11.5;
+  game.update(0.02);
+  assert.equal(game.phase, 'playing');
+
+  advance(game, 8.5);
+  assert.equal(game.phase, 'finished');
+  assert.equal(game.winner, 0);
 });

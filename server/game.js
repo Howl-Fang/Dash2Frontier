@@ -3,14 +3,17 @@ import {
   BLOCK_TYPES,
   CONFIG,
   DIRECTIONS,
-  LUCKY_EFFECTS,
-  LUCKY_EFFECT_ORDER,
+  EFFECTS,
+  LUCKY_BUFF_POOL,
+  LUCKY_DEBUFF_POOL,
   SKILLS,
   distanceToGoalZone,
   goalDirectionForPlayer,
   isGoalRow,
   isGoalTriggerCell,
+  luckyEffectForRoll,
   oppositeDirection,
+  pickFromPool,
 } from '../shared/config.js';
 import { cellIndex } from './map.js';
 
@@ -22,6 +25,25 @@ const round = (value, places = 2) => {
 
 const isDiggable = (block) => block !== BLOCK.EMPTY && block !== BLOCK.BEDROCK;
 const isSolid = (block) => block !== BLOCK.EMPTY;
+
+/** Every timer stored under player.buffs that ticks down each update. */
+const TIMED_BUFFS = Object.freeze([
+  'overdrive',
+  'cryo',
+  'echo',
+  'invert',
+  'freeze',
+  'fog',
+  'lag',
+  'qte',
+  'misfortune',
+  'reject',
+  'balance',
+  'mundane',
+  'hijack',
+  'examPass',
+  'examFail',
+]);
 
 function resolvedConfig(overrides = {}) {
   return {
@@ -61,6 +83,7 @@ export class Game {
     this.pendingChanges = [];
     this.pendingEvents = [];
     this.pendingCryo = [];
+    this.lockdown = 0;
     this.players = players.map((player, index) => this.#createPlayer(player, index));
     this.startGoalDistances = this.players.map((player) =>
       distanceToGoalZone(this.config, player.index, player.x, player.y),
@@ -86,7 +109,27 @@ export class Game {
       blockedCooldown: 0,
       energy: energy.start,
       cooldowns: Object.fromEntries(Object.keys(SKILLS).map((skill) => [skill, 0])),
-      buffs: { overdrive: 0, cryo: 0, echo: 0, invert: 0, freeze: 0 },
+      buffs: {
+        overdrive: 0,
+        cryo: 0,
+        echo: 0,
+        invert: 0,
+        freeze: 0,
+        fog: 0,
+        lag: 0,
+        qte: 0,
+        misfortune: 0,
+        reject: 0,
+        balance: 0,
+        mundane: 0,
+        hijack: 0,
+        examPass: 0,
+        examFail: 0,
+      },
+      luckCharges: 0,
+      thawTaps: 0,
+      thawNeeded: 0,
+      exam: null,
       cheat: false,
       stats: { blocksMined: 0, skillsUsed: 0, cellsMoved: 0 },
     };
@@ -107,6 +150,9 @@ export class Game {
     if (this.phase !== 'playing') return { ok: false, error: 'phase' };
     const player = this.players[index];
     if (!player || !player.connected) return { ok: false, error: 'inactive' };
+
+    // Hijack locks the wheel: releasing or turning is ignored until it expires.
+    if (player.buffs.hijack > 0) return { ok: true, locked: true };
 
     if (direction === null) {
       player.heldDir = null;
@@ -184,20 +230,27 @@ export class Game {
     this.elapsed += dt;
 
     const energyConfig = this.config.energy;
+    this.lockdown = Math.max(0, this.lockdown - dt);
     for (const player of this.players) {
       for (const skill of Object.keys(player.cooldowns)) {
         player.cooldowns[skill] = Math.max(0, player.cooldowns[skill] - dt);
       }
-      player.buffs.overdrive = Math.max(0, player.buffs.overdrive - dt);
-      player.buffs.cryo = Math.max(0, player.buffs.cryo - dt);
-      player.buffs.echo = Math.max(0, player.buffs.echo - dt);
-      player.buffs.invert = Math.max(0, player.buffs.invert - dt);
-      player.buffs.freeze = Math.max(0, player.buffs.freeze - dt);
+      for (const key of TIMED_BUFFS) {
+        player.buffs[key] = Math.max(0, player.buffs[key] - dt);
+      }
+      if (player.buffs.qte <= 0) {
+        player.thawTaps = 0;
+        player.thawNeeded = 0;
+      }
       player.blockedCooldown = Math.max(0, player.blockedCooldown - dt);
       player.energy = Math.min(
         energyConfig.max,
         player.energy + energyConfig.regenPerSecond * dt,
       );
+      if (player.exam) {
+        player.exam.remaining -= dt;
+        if (player.exam.remaining <= 0) this.#finishExam(player, false, 'timeout');
+      }
     }
 
     this.#updateCryoEffects(dt);
@@ -214,10 +267,14 @@ export class Game {
   }
 
   #updatePlayer(player, dt) {
-    // Cheat-mode freeze is a hard stop: no movement, no mining.
-    if (player.buffs.freeze > 0) {
+    // Cheat freeze and the QTE freeze are hard stops: no movement, no mining.
+    if (player.buffs.freeze > 0 || player.buffs.qte > 0) {
       player.mining = null;
       return;
+    }
+    // Hijack keeps the drill running in the locked direction.
+    if (player.buffs.hijack > 0 && !player.heldDir) {
+      player.heldDir = player.facing;
     }
 
     if (player.heldDir) {
@@ -307,11 +364,18 @@ export class Game {
         const rowHigh = clamp(Math.floor(player.y + h - 1e-7), 0, rows - 1);
 
         let hit = null;
+        let locked = false;
         if (col >= 0 && col < cols) {
           for (let row = rowLow; row <= rowHigh; row += 1) {
             const index = cellIndex(col, row, cols);
-            if (isSolid(this.map.cells[index])) {
-              hit = { col, row, block: this.map.cells[index] };
+            const block = this.map.cells[index];
+            if (isSolid(block)) {
+              hit = { col, row, block };
+              break;
+            }
+            if (this.lockdown > 0 && isGoalTriggerCell(col, row, this.config)) {
+              hit = { col, row, block };
+              locked = true;
               break;
             }
           }
@@ -320,7 +384,8 @@ export class Game {
         if (hit) {
           const stop = step > 0 ? col - h - 1e-4 : col + 1 + h + 1e-4;
           player.x = step > 0 ? Math.min(nx, stop) : Math.max(nx, stop);
-          this.#emitWallHit(player, hit);
+          if (locked) this.#emitBlocked(player, 'locked', col, hit.row);
+          else this.#emitWallHit(player, hit);
           break;
         }
 
@@ -346,11 +411,18 @@ export class Game {
         const colHigh = clamp(Math.floor(player.x + h - 1e-7), 0, cols - 1);
 
         let hit = null;
+        let locked = false;
         if (row >= 0 && row < rows) {
           for (let col = colLow; col <= colHigh; col += 1) {
             const index = cellIndex(col, row, cols);
-            if (isSolid(this.map.cells[index])) {
-              hit = { col, row, block: this.map.cells[index] };
+            const block = this.map.cells[index];
+            if (isSolid(block)) {
+              hit = { col, row, block };
+              break;
+            }
+            if (this.lockdown > 0 && isGoalTriggerCell(col, row, this.config)) {
+              hit = { col, row, block };
+              locked = true;
               break;
             }
           }
@@ -359,7 +431,8 @@ export class Game {
         if (hit) {
           const stop = step > 0 ? row - h - 1e-4 : row + 1 + h + 1e-4;
           player.y = step > 0 ? Math.min(ny, stop) : Math.max(ny, stop);
-          this.#emitWallHit(player, hit);
+          if (locked) this.#emitBlocked(player, 'locked', hit.col, row);
+          else this.#emitWallHit(player, hit);
           break;
         }
 
@@ -415,7 +488,21 @@ export class Game {
   #mineMultiplier(player) {
     const overdrive = player.buffs.overdrive > 0 ? SKILLS.overdrive.mineMultiplier : 1;
     const cryo = player.buffs.cryo > 0 ? SKILLS.cryo.mineMultiplier : 1;
-    return overdrive * cryo;
+    const hijack = player.buffs.hijack > 0 ? EFFECTS.hijack.mineMultiplier : 1;
+    let balance = 1;
+    if (player.buffs.balance > 0) {
+      const mine = this.#progressFor(player);
+      const rival = this.players[1 - player.index];
+      const other = rival ? this.#progressFor(rival) : mine;
+      const delta = mine - other;
+      let behind;
+      if (Math.abs(delta) < 1e-4) behind = this.random() < 0.5;
+      else behind = delta < 0;
+      balance = behind ? EFFECTS.balance.behindMultiplier : 1 / EFFECTS.balance.aheadDivisor;
+    }
+    const examPass = player.buffs.examPass > 0 ? this.config.exam.passMultiplier : 1;
+    const examFail = player.buffs.examFail > 0 ? this.config.exam.failMultiplier : 1;
+    return overdrive * cryo * hijack * balance * examPass * examFail;
   }
 
   /**
@@ -573,23 +660,43 @@ export class Game {
   }
 
   /**
-   * Roll one of the five lucky effects. Terrain effects rewrite the map,
-   * buffs sit on the miner. Baseline columns and occupied cells are always
-   * left alone so a gamble can never seal a gate or bury a miner.
+   * Roll a lucky outcome. Luck forces a buff on the miner, Misfortune forces a
+   * debuff on the miner, otherwise the weighted table is used and debuffs
+   * mostly land on the rival.
    */
   #triggerLucky(player, col, row) {
-    const roll = Number(this.random());
-    const cursor = Number.isFinite(roll) ? roll : 0;
-    const pick = Math.min(
-      LUCKY_EFFECT_ORDER.length - 1,
-      Math.max(0, Math.floor(cursor * LUCKY_EFFECT_ORDER.length)),
-    );
-    const effectId = LUCKY_EFFECT_ORDER[pick];
-    const effect = LUCKY_EFFECTS[effectId];
-    const changed = [];
+    let effectId;
+    let target = player;
 
-    if (effectId === 'soften' || effectId === 'harden') {
-      const block = effectId === 'soften' ? BLOCK.SOIL : BLOCK.OBSIDIAN;
+    if (player.luckCharges > 0) {
+      player.luckCharges -= 1;
+      effectId = pickFromPool(LUCKY_BUFF_POOL, this.random());
+      target = player;
+    } else if (player.buffs.misfortune > 0) {
+      effectId = pickFromPool(LUCKY_DEBUFF_POOL, this.random());
+      target = player;
+    } else {
+      effectId = luckyEffectForRoll(this.random());
+      const def = EFFECTS[effectId];
+      if (def && def.kind === 'debuff') {
+        const chance = this.config.luckySelfDebuffChance ?? 0.2;
+        target = this.random() < chance ? player : this.players[1 - player.index];
+      }
+    }
+
+    const effect = EFFECTS[effectId];
+    if (!effect) return;
+    if (effect.kind === 'terrain') {
+      this.#applyTerrain(player, effect, col, row);
+      return;
+    }
+    this.#applyEffect(player.index, target.index, effectId, { col, row });
+  }
+
+  #applyTerrain(player, effect, col, row) {
+    const changed = [];
+    if (effect.id === 'soften' || effect.id === 'harden') {
+      const block = effect.id === 'soften' ? BLOCK.SOIL : BLOCK.OBSIDIAN;
       const radius = effect.radius;
       for (let dc = -radius; dc <= radius; dc += 1) {
         for (let dr = -radius; dr <= radius; dr += 1) {
@@ -604,7 +711,7 @@ export class Game {
           this.#setBlock(targetCol, targetRow, block, changed);
         }
       }
-    } else if (effectId === 'wall') {
+    } else if (effect.id === 'wall') {
       const column = Math.floor(player.x);
       if (!this.#isBaselineColumn(column)) {
         const playerRow = Math.floor(player.y);
@@ -616,25 +723,201 @@ export class Game {
           this.#setBlock(column, targetRow, BLOCK.OBSIDIAN, changed);
         }
       }
-    } else if (effectId === 'echo' || effectId === 'invert') {
-      player.buffs[effectId] = Math.max(player.buffs[effectId], effect.duration);
     }
 
     this.pendingEvents.push({
-      type: 'lucky',
+      type: 'effect',
       player: player.index,
+      target: null,
+      effect: effect.id,
+      name: effect.name,
+      kind: 'terrain',
+      good: Boolean(effect.good),
+      icon: effect.icon,
+      blocked: false,
       col,
       row,
-      effect: effectId,
-      name: effect.name,
-      good: effect.good,
-      duration: effect.duration ?? null,
       changes: changed.length,
+    });
+  }
+
+  /**
+   * Apply one player status. Mundane blocks buffs and debuffs; Reject blocks
+   * debuffs. Tradeoffs are always self-imposed and bypass both.
+   */
+  #applyEffect(casterIndex, targetIndex, effectId, meta = {}) {
+    const def = EFFECTS[effectId];
+    const target = this.players[targetIndex];
+    if (!def || !target) return { blocked: false };
+
+    let blocked = false;
+    if (def.kind === 'buff' || def.kind === 'debuff') {
+      if (target.buffs.mundane > 0) blocked = true;
+      if (def.kind === 'debuff' && target.buffs.reject > 0) blocked = true;
+    }
+
+    if (!blocked) {
+      if (effectId === 'drain') {
+        target.energy = 0;
+      } else if (effectId === 'luck') {
+        target.luckCharges = Math.max(target.luckCharges, def.charges);
+      } else if (effectId === 'freeze') {
+        target.buffs.qte = Math.max(target.buffs.qte, def.duration);
+        target.thawTaps = 0;
+        target.thawNeeded = def.taps;
+      } else if (effectId === 'lockdown') {
+        this.lockdown = Math.max(this.lockdown, def.duration);
+      } else if (effectId === 'exam') {
+        this.#startExam(target);
+      } else if (effectId === 'hijack') {
+        target.buffs.hijack = Math.max(target.buffs.hijack, def.duration);
+        // Lock the wheel on the way the miner is already facing.
+        target.heldDir = target.facing;
+      } else if (def.duration && Object.prototype.hasOwnProperty.call(target.buffs, effectId)) {
+        target.buffs[effectId] = Math.max(target.buffs[effectId], def.duration);
+      }
+    }
+
+    this.pendingEvents.push({
+      type: 'effect',
+      player: casterIndex,
+      target: targetIndex,
+      effect: effectId,
+      name: def.name,
+      kind: def.kind,
+      icon: def.icon,
+      blocked,
+      duration: def.duration ?? null,
+      col: meta.col ?? null,
+      row: meta.row ?? null,
+      charges: effectId === 'luck' ? target.luckCharges : null,
+    });
+    return { blocked };
+  }
+
+  /** QTE thaw: each direction tap chips away at the freeze. */
+  tapThaw(index) {
+    const player = this.players[index];
+    if (!player || player.buffs.qte <= 0) {
+      return { ok: false, error: 'frozen', message: 'You are not frozen.' };
+    }
+    player.thawTaps += 1;
+    if (player.thawTaps >= player.thawNeeded) {
+      player.buffs.qte = 0;
+      player.thawTaps = 0;
+      player.thawNeeded = 0;
+      this.pendingEvents.push({ type: 'thawed', player: index });
+      return { ok: true, thawed: true };
+    }
+    return { ok: true, taps: player.thawTaps, needed: player.thawNeeded };
+  }
+
+  submitExam(index, answers) {
+    const player = this.players[index];
+    if (!player || !player.exam) {
+      return { ok: false, error: 'exam', message: 'No exam is active.' };
+    }
+    if (!Array.isArray(answers) || answers.length !== player.exam.answers.length) {
+      return { ok: false, error: 'exam', message: 'Answer all three questions.' };
+    }
+    const passed = player.exam.answers.every((answer, i) => Number(answers[i]) === answer);
+    this.#finishExam(player, passed, 'submitted');
+    return { ok: true, passed };
+  }
+
+  /** Developer menu: force a status on self or the rival. */
+  applyDevEffect(index, effectId, target = 'self') {
+    if (this.phase !== 'playing') {
+      return { ok: false, error: 'phase', message: 'The match is not running.' };
+    }
+    const caster = this.players[index];
+    if (!caster) return { ok: false, error: 'inactive', message: 'No miner there.' };
+    const def = EFFECTS[effectId];
+    if (!def || def.kind === 'terrain') {
+      return { ok: false, error: 'effect', message: 'Unknown effect.' };
+    }
+    const targetIndex = target === 'rival' ? 1 - index : index;
+    const result = this.#applyEffect(index, targetIndex, effectId, {});
+    return { ok: true, target: targetIndex, blocked: result.blocked };
+  }
+
+  #startExam(player) {
+    const examConfig = this.config.exam || CONFIG.exam;
+    const questions = [];
+    const answers = [];
+    for (let i = 0; i < examConfig.questions; i += 1) {
+      const question = this.#makeQuestion();
+      questions.push({ text: question.text, options: question.options });
+      answers.push(question.answer);
+    }
+    player.exam = {
+      remaining: examConfig.seconds,
+      questions,
+      answers,
+    };
+    this.pendingEvents.push({ type: 'examStart', player: player.index });
+  }
+
+  #makeQuestion() {
+    const a = 2 + Math.floor(this.random() * 98);
+    const b = 2 + Math.floor(this.random() * 98);
+    const addition = this.random() < 0.5;
+    let value;
+    let text;
+    if (addition) {
+      value = a + b;
+      text = `${a} + ${b}`;
+    } else {
+      const high = Math.max(a, b);
+      const low = Math.min(a, b);
+      value = high - low;
+      text = `${high} − ${low}`;
+    }
+
+    const options = new Set([value]);
+    let guard = 0;
+    while (options.size < 4 && guard < 60) {
+      guard += 1;
+      const delta = 1 + Math.floor(this.random() * 12);
+      const up = value + delta;
+      if (!options.has(up)) options.add(up);
+      const down = value - delta;
+      if (options.size < 4 && down >= 0 && !options.has(down)) options.add(down);
+    }
+    // Deterministic fill keeps every question at four choices.
+    let filler = 1;
+    while (options.size < 4) {
+      options.add(value + filler);
+      filler += 1;
+    }
+    const list = [...options];
+    for (let i = list.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(this.random() * (i + 1));
+      [list[i], list[j]] = [list[j], list[i]];
+    }
+    return { text: `${text} = ?`, options: list.map(String), answer: list.indexOf(value) };
+  }
+
+  #finishExam(player, passed, reason) {
+    if (!player.exam) return;
+    const examConfig = this.config.exam || CONFIG.exam;
+    player.exam = null;
+    if (passed) {
+      player.buffs.examPass = Math.max(player.buffs.examPass, examConfig.passDuration);
+    } else {
+      player.buffs.examFail = Math.max(player.buffs.examFail, examConfig.failDuration);
+    }
+    this.pendingEvents.push({
+      type: 'examResult',
+      player: player.index,
+      passed: Boolean(passed),
+      reason,
     });
   }
 
   #checkBreach(player) {
     if (this.phase !== 'playing') return;
+    if (this.lockdown > 0) return;
     const col = clamp(Math.floor(player.x), 0, this.map.cols - 1);
     const row = clamp(Math.floor(player.y), 0, this.map.rows - 1);
     if (col !== this.config.goalCols[player.index]) return;
@@ -747,7 +1030,8 @@ export class Game {
     }
 
     player.energy -= skill.cost;
-    player.cooldowns[skillId] = skill.cooldown;
+    const lagMultiplier = player.buffs.lag > 0 ? EFFECTS.lag.cooldownMultiplier : 1;
+    player.cooldowns[skillId] = skill.cooldown * lagMultiplier;
     player.stats.skillsUsed += 1;
     this.pendingEvents.push({
       type: 'skill',
@@ -931,6 +1215,7 @@ export class Game {
       winner: this.winner,
       reason: this.reason,
       gate: this.gate,
+      lockdownMs: Math.max(0, Math.round(this.lockdown * 1000)),
       players: this.players.map((player) => ({
         index: player.index,
         name: player.name,
@@ -959,7 +1244,28 @@ export class Game {
           echo: round(player.buffs.echo, 1),
           invert: round(player.buffs.invert, 1),
           freeze: round(player.buffs.freeze, 1),
+          fog: round(player.buffs.fog, 1),
+          lag: round(player.buffs.lag, 1),
+          qte: round(player.buffs.qte, 1),
+          misfortune: round(player.buffs.misfortune, 1),
+          reject: round(player.buffs.reject, 1),
+          balance: round(player.buffs.balance, 1),
+          mundane: round(player.buffs.mundane, 1),
+          hijack: round(player.buffs.hijack, 1),
+          examPass: round(player.buffs.examPass, 1),
+          examFail: round(player.buffs.examFail, 1),
         },
+        luckCharges: player.luckCharges,
+        thaw:
+          player.buffs.qte > 0
+            ? { taps: player.thawTaps, needed: player.thawNeeded }
+            : null,
+        exam: player.exam
+          ? {
+              remainingMs: Math.max(0, Math.round(player.exam.remaining * 1000)),
+              questions: player.exam.questions,
+            }
+          : null,
         cheat: player.cheat,
         stats: { ...player.stats },
         progress: round(this.#progressFor(player), 3),
