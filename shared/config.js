@@ -444,7 +444,7 @@ export const CONFIG = Object.freeze({
     failMultiplier: 0.5,
   }),
   map: Object.freeze({
-    bedrockChance: 0.075,
+    bedrockChance: 0.09,
     veinCount: 10,
     veinMin: 5,
     veinMax: 13,
@@ -452,7 +452,7 @@ export const CONFIG = Object.freeze({
     clusterMin: 3,
     clusterMax: 8,
     // Lucky blocks are seeded in the top and bottom stretches of the map.
-    luckyCount: 10,
+    luckyCount: 20,
     luckyBands: Object.freeze([
       Object.freeze([1, 6]),
       Object.freeze([21, 26]),
