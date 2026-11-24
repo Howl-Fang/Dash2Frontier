@@ -56,48 +56,10 @@ function addVeins(cells, cols, rows, random, mapConfig) {
 }
 
 /**
- * Long vertical bedrock faults. Each fault spans the whole seam except for one
- * short gap, so the only way past is to find and reach that gap. Two faults in
- * each half turn the direct race into a route-planning problem.
+ * Irregular bedrock knots so routes cannot be memorised as clean corridors.
+ * Long fault lines and shelves were removed: they chopped the seam into
+ * hard-to-reach pockets and buried lucky blocks behind unbreakable walls.
  */
-function addFaultWalls(cells, cols, rows, random, mapConfig) {
-  const half = Math.floor(cols / 2);
-  const minCol = Math.max(4, Math.floor(cols * 0.08));
-  const maxCol = half - 4;
-  const used = new Set();
-
-  for (let fault = 0; fault < mapConfig.faultCount; fault += 1) {
-    let col = randomInt(random, minCol, maxCol);
-    let guard = 0;
-    while (used.has(col) && guard < 20) {
-      col = randomInt(random, minCol, maxCol);
-      guard += 1;
-    }
-    used.add(col);
-
-    const gapLength = randomInt(random, mapConfig.faultGapMin, mapConfig.faultGapMax);
-    const gapStart = randomInt(random, 1, rows - gapLength - 1);
-    for (let row = 0; row < rows; row += 1) {
-      if (row >= gapStart && row < gapStart + gapLength) continue;
-      cells[cellIndex(col, row, cols)] = BLOCK.BEDROCK;
-    }
-  }
-}
-
-/** Horizontal bedrock shelves that break up the open middle of the seam. */
-function addHorizontalWalls(cells, cols, rows, random, mapConfig) {
-  const half = Math.floor(cols / 2);
-  for (let wall = 0; wall < mapConfig.wallCount; wall += 1) {
-    const row = randomInt(random, 1, rows - 2);
-    const length = randomInt(random, mapConfig.wallMin, mapConfig.wallMax);
-    const startCol = randomInt(random, 2, Math.max(2, half - length - 1));
-    for (let col = startCol; col < Math.min(half, startCol + length); col += 1) {
-      cells[cellIndex(col, row, cols)] = BLOCK.BEDROCK;
-    }
-  }
-}
-
-/** Irregular bedrock knots so routes cannot be memorised as clean corridors. */
 function addClusters(cells, cols, rows, random, mapConfig) {
   const half = Math.floor(cols / 2);
   for (let cluster = 0; cluster < mapConfig.clusterCount; cluster += 1) {
@@ -385,8 +347,6 @@ function buildRawMap(cols, rows, random, config) {
     }
   }
   addVeins(cells, cols, rows, random, mapConfig);
-  addFaultWalls(cells, cols, rows, random, mapConfig);
-  addHorizontalWalls(cells, cols, rows, random, mapConfig);
   addClusters(cells, cols, rows, random, mapConfig);
   mirrorHalf(cells, cols, rows);
   carveStartPockets(cells, cols, rows, config.startPocket);
@@ -432,7 +392,7 @@ function routeScore(analysis, mapConfig) {
  * seed up to `maxAttempts` failed the normal validator.
  */
 function buildFallbackMap(config) {
-  const mapConfig = { ...config.map, faultCount: 0, wallCount: 0, clusterCount: 0, veinCount: 0 };
+  const mapConfig = { ...config.map, clusterCount: 0, veinCount: 0 };
   const map = buildRawMap(config.cols, config.rows, mulberry32(0x5eed), {
     ...config,
     map: mapConfig,

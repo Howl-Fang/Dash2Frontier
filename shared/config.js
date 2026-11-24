@@ -234,17 +234,11 @@ export const CONFIG = Object.freeze({
     veinCount: 10,
     veinMin: 5,
     veinMax: 13,
-    faultCount: 2,
-    faultGapMin: 2,
-    faultGapMax: 4,
-    wallCount: 3,
-    wallMin: 7,
-    wallMax: 14,
     clusterCount: 9,
     clusterMin: 3,
     clusterMax: 8,
     // Lucky blocks are seeded in the top and bottom stretches of the map.
-    luckyCount: 6,
+    luckyCount: 10,
     luckyBands: Object.freeze([
       Object.freeze([1, 6]),
       Object.freeze([21, 26]),
