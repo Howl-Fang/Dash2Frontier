@@ -1299,20 +1299,34 @@ export class GameRenderer {
     const view = this.viewPositions[index];
     if (!view) return;
     const tile = this.tile;
-    const fontSize = Math.max(8, Math.min(12, tile * 0.46));
-    const lineHeight = fontSize + 5;
+    const fontSize = Math.max(12, Math.min(17, tile * 0.8));
+    const lineHeight = fontSize + 8;
+    const padX = 9;
     const baseX = this.offsetX + view.x * tile;
-    const baseY = this.offsetY + view.y * tile - tile * 0.86 - 26;
+    const baseY = this.offsetY + view.y * tile - tile * 0.86 - 30;
     ctx.save();
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.font = `700 ${fontSize}px ${FONT_MONO}`;
 
     const drawLine = (text, y, color, alpha) => {
-      const width = ctx.measureText(text).width + 10;
+      const width = ctx.measureText(text).width + padX * 2;
       ctx.globalAlpha = alpha;
-      ctx.fillStyle = 'rgba(7, 9, 13, 0.85)';
-      ctx.fillRect(baseX - width / 2, y - lineHeight / 2, width, lineHeight);
+      ctx.fillStyle = 'rgba(7, 9, 13, 0.88)';
+      const left = baseX - width / 2;
+      const top = y - lineHeight / 2;
+      if (typeof ctx.roundRect === 'function') {
+        ctx.beginPath();
+        ctx.roundRect(left, top, width, lineHeight, 5);
+        ctx.fill();
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = alpha * 0.5;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      } else {
+        ctx.fillRect(left, top, width, lineHeight);
+      }
+      ctx.globalAlpha = alpha;
       ctx.fillStyle = color;
       ctx.fillText(text, baseX, y + 0.5);
     };

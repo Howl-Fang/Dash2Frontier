@@ -9,6 +9,7 @@ import {
   isGoalRow,
 } from '/shared/config.js';
 import { GameAudio } from './audio.js';
+import { effectIconSvg } from './icons.js';
 import { GameRenderer } from './renderer.js';
 
 const SESSION_KEY = 'd2f.session.v1';
@@ -39,14 +40,10 @@ const SKILL_KEYS = {
 const TARGETED_SKILLS = new Set(['build', 'blast', 'cryo']);
 
 const SKILL_ICONS = {
-  build:
-    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7h17M3.5 12h17M3.5 17h17"/><path d="M7 7v5M17 12v5M12 17v-5"/></svg>',
-  blast:
-    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v4M12 18v4M2 12h4M18 12h4M5 5l3 3M16 16l3 3M19 5l-3 3M8 16l-3 3"/><circle cx="12" cy="12" r="2.4"/></svg>',
-  overdrive:
-    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 2 5 13h5.5L10 22l8.5-11H13l.5-9Z"/></svg>',
-  cryo:
-    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v20M4.1 7l15.8 10M19.9 7 4.1 17"/><path d="m9 4 3 3 3-3M9 20l3-3 3 3M3 10l4 .8L6 7M21 14l-4-.8.9 3.8M3 14l4-1-1 3.8M21 10l-4 1 1-3.8"/></svg>',
+  build: effectIconSvg('build', 'skill-glyph'),
+  blast: effectIconSvg('blast', 'skill-glyph'),
+  overdrive: effectIconSvg('overdrive', 'skill-glyph'),
+  cryo: effectIconSvg('cryo', 'skill-glyph'),
 };
 
 const $ = (id) => document.getElementById(id);
@@ -408,7 +405,7 @@ function buildDevMenu() {
       row.className = `dev-effect is-${kind}`;
       const icon = document.createElement('span');
       icon.className = 'dev-effect-icon';
-      icon.textContent = def.icon;
+      icon.innerHTML = effectIconSvg(def.id, 'dev-glyph');
       const body = document.createElement('div');
       const name = document.createElement('span');
       name.className = 'dev-effect-name';
@@ -1454,11 +1451,14 @@ function statusChip(id, value) {
   chip.title = chip.dataset.tip;
   const icon = document.createElement('span');
   icon.className = 'chip-icon';
-  icon.textContent = def.icon;
+  icon.innerHTML = effectIconSvg(id, 'chip-glyph');
+  const name = document.createElement('span');
+  name.className = 'chip-name';
+  name.textContent = def.name;
   const text = document.createElement('span');
   text.className = 'chip-value';
   text.textContent = value;
-  chip.append(icon, text);
+  chip.append(icon, name, text);
   return chip;
 }
 
