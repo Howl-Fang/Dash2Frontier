@@ -170,6 +170,7 @@ const state = {
   lockdownActive: false,
   examId: null,
   examAnswers: [],
+  examData: null,
   submittedExamId: null,
   devOpen: false,
   devTarget: 'self',
@@ -913,6 +914,7 @@ function resetGameView() {
   state.hijackActive = false;
   state.lockdownActive = false;
   state.devPresses = [];
+  state.examData = null;
   setDevMenu(false);
   hideExam();
   updateCheatBadge();
@@ -1106,6 +1108,7 @@ function setupSocket() {
   socket.on('game:init', onGameInit);
   socket.on('game:snapshot', onSnapshot);
   socket.on('game:fx', onFx);
+  socket.on('game:exam', onGameExam);
   socket.on('game:over', onGameOver);
   socket.on('game:error', onGameError);
 
@@ -1174,6 +1177,7 @@ function onGameInit(payload) {
   state.hijackActive = false;
   state.lockdownActive = false;
   state.devPresses = [];
+  state.examData = null;
   setDevMenu(false);
   hideExam();
   updateSessionIdentity();
@@ -1306,6 +1310,7 @@ function onFx(payload) {
         notifyPlayer(event.player, 'THAWED', 'cyan');
         break;
       case 'examStart':
+        if (event.player === state.you && event.exam) state.examData = event.exam;
         notifyPlayer(event.player, 'EXAM!', 'tradeoff');
         break;
       case 'examResult':
@@ -1408,6 +1413,8 @@ function updateHudEmpty() {
     card.energy.textContent = '0';
     card.energyFill.style.width = '0%';
     card.buffs.replaceChildren();
+    chipCaches[index].signature = '';
+    chipCaches[index].entries = new Map();
     card.root.classList.remove('is-offline');
   }
   if (raceMarkerEls[0]) raceMarkerEls[0].style.left = '0%';
@@ -1441,38 +1448,17 @@ const STATUS_CHIP_ORDER = [
   'exam',
 ];
 
-function statusChip(id, value) {
-  const def = STATUS_DEFS[id];
-  if (!def) return null;
-  const description = def.description || EFFECTS[id]?.description || '';
-  const chip = document.createElement('span');
-  chip.className = `buff-chip is-${def.kind}`;
-  chip.dataset.tip = description ? `${def.name} — ${description}` : def.name;
-  chip.title = chip.dataset.tip;
-  const icon = document.createElement('span');
-  icon.className = 'chip-icon';
-  icon.innerHTML = effectIconSvg(id, 'chip-glyph');
-  const name = document.createElement('span');
-  name.className = 'chip-name';
-  name.textContent = def.name;
-  const text = document.createElement('span');
-  text.className = 'chip-value';
-  text.textContent = value;
-  chip.append(icon, name, text);
-  return chip;
-}
-
-function buildStatusChips(player) {
-  const chips = [];
+function statusEntries(player) {
+  const entries = [];
   const buffs = player.buffs || {};
   for (const id of STATUS_CHIP_ORDER) {
     if (id === 'luck') {
-      if (player.luckCharges > 0) chips.push(statusChip('luck', `×${player.luckCharges}`));
+      if (player.luckCharges > 0) entries.push({ id, value: `×${player.luckCharges}` });
       continue;
     }
     if (id === 'exam') {
       if (player.exam) {
-        chips.push(statusChip('exam', `${Math.ceil((player.exam.remainingMs || 0) / 1000)}s`));
+        entries.push({ id, value: `${Math.ceil((player.exam.remainingMs || 0) / 1000)}s` });
       }
       continue;
     }
@@ -1482,9 +1468,58 @@ function buildStatusChips(player) {
     if (id === 'qte' && player.thaw) {
       value = `${remaining.toFixed(1)}s · ${player.thaw.taps}/${player.thaw.needed}`;
     }
-    chips.push(statusChip(id, value));
+    entries.push({ id, value });
   }
-  return chips.filter(Boolean);
+  return entries;
+}
+
+function createStatusChip(entry) {
+  const def = STATUS_DEFS[entry.id];
+  const description = def.description || EFFECTS[entry.id]?.description || '';
+  const chip = document.createElement('span');
+  chip.className = `buff-chip is-${def.kind}`;
+  chip.dataset.tip = description ? `${def.name} — ${description}` : def.name;
+  chip.title = chip.dataset.tip;
+  const icon = document.createElement('span');
+  icon.className = 'chip-icon';
+  icon.innerHTML = effectIconSvg(entry.id, 'chip-glyph');
+  const name = document.createElement('span');
+  name.className = 'chip-name';
+  name.textContent = def.name;
+  const value = document.createElement('span');
+  value.className = 'chip-value';
+  value.textContent = entry.value;
+  chip.append(icon, name, value);
+  return { chip, value };
+}
+
+// Chips are rebuilt only when the *set* of statuses changes; while a status
+// is merely ticking down we update one text node. This keeps 20 Hz snapshots
+// from churning the HUD DOM (and re-parsing SVG) every frame.
+const chipCaches = [0, 1].map(() => ({ signature: '', entries: new Map() }));
+
+function updateStatusChips(index, player) {
+  const card = playerCards[index];
+  if (!card) return;
+  const entries = statusEntries(player);
+  const cache = chipCaches[index];
+  const signature = entries.map((entry) => entry.id).join('|');
+  if (signature !== cache.signature) {
+    cache.signature = signature;
+    cache.entries = new Map();
+    const chips = [];
+    for (const entry of entries) {
+      const made = createStatusChip(entry);
+      cache.entries.set(entry.id, made);
+      chips.push(made.chip);
+    }
+    card.buffs.replaceChildren(...chips);
+    return;
+  }
+  for (const entry of entries) {
+    const made = cache.entries.get(entry.id);
+    if (made && made.value.textContent !== entry.value) made.value.textContent = entry.value;
+  }
 }
 
 function setupStatusTooltip() {
@@ -1573,8 +1608,17 @@ function updateExamUi(snapshot) {
     if (examOverlay) examOverlay.classList.add('hidden');
     return;
   }
-  if (state.examId !== exam.id) renderExam(exam);
+  const data = state.examData;
+  if (!data || data.id !== exam.id) return;
+  if (state.examId !== exam.id) renderExam(data);
   examTimerEl.textContent = `${(exam.remainingMs / 1000).toFixed(1)}s`;
+}
+
+/** Exam questions arrive once (examStart fx / game:exam on join), not per tick. */
+function onGameExam(payload) {
+  if (!payload?.id || !Array.isArray(payload.questions)) return;
+  state.examData = { id: payload.id, questions: payload.questions };
+  if (state.snapshot) updateExamUi(state.snapshot);
 }
 
 async function submitExamAnswers() {
@@ -1610,10 +1654,8 @@ function updateHud(snapshot) {
       Math.max(0, ((player.energy || 0) / CONFIG.energy.max) * 100),
     )}%`;
 
-    const chips = buildStatusChips(player);
-    card.buffs.replaceChildren(...chips);
+    updateStatusChips(index, player);
   }
-
   if (players[0] && raceMarkerEls[0]) {
     raceMarkerEls[0].style.left = `${players[0].progress * 100}%`;
     if (raceFillEls[0]) raceFillEls[0].style.width = `${players[0].progress * 100}%`;
@@ -1877,6 +1919,7 @@ function canControl() {
 }
 
 function syncDirection(force = false) {
+  renderer.setLocalInput(canControl() ? currentDirection() : null);
   if (!socket || !state.connected) {
     state.sentDir = null;
     return;
@@ -1893,6 +1936,7 @@ function clearHeldKeys() {
 
 function flushInput() {
   clearHeldKeys();
+  renderer.setLocalInput(null);
   if (socket?.connected && state.code) {
     if (state.sentDir !== null) {
       state.sentDir = null;

@@ -140,6 +140,13 @@ export class Game {
     return this.players[index];
   }
 
+  /** Questions for the player's live exam, or null. Sent once, never per tick. */
+  examPayload(index) {
+    const player = this.players[index];
+    if (!player?.exam) return null;
+    return { id: player.exam.id, questions: player.exam.questions };
+  }
+
   setConnected(index, connected) {
     const player = this.players[index];
     if (!player) return;
@@ -859,7 +866,11 @@ export class Game {
       questions,
       answers,
     };
-    this.pendingEvents.push({ type: 'examStart', player: player.index });
+    this.pendingEvents.push({
+      type: 'examStart',
+      player: player.index,
+      exam: { id: player.exam.id, questions: player.exam.questions },
+    });
   }
 
   #makeQuestion() {
@@ -1242,37 +1253,27 @@ export class Game {
             round(remaining, 1),
           ]),
         ),
-        buffs: {
-          overdrive: round(player.buffs.overdrive, 1),
-          cryo: round(player.buffs.cryo, 1),
-          echo: round(player.buffs.echo, 1),
-          invert: round(player.buffs.invert, 1),
-          freeze: round(player.buffs.freeze, 1),
-          fog: round(player.buffs.fog, 1),
-          lag: round(player.buffs.lag, 1),
-          qte: round(player.buffs.qte, 1),
-          misfortune: round(player.buffs.misfortune, 1),
-          reject: round(player.buffs.reject, 1),
-          balance: round(player.buffs.balance, 1),
-          mundane: round(player.buffs.mundane, 1),
-          hijack: round(player.buffs.hijack, 1),
-          examPass: round(player.buffs.examPass, 1),
-          examFail: round(player.buffs.examFail, 1),
-        },
+        // Only active statuses are broadcast: an idle player costs one empty
+        // object instead of fifteen zeroed timers on every snapshot.
+        buffs: Object.fromEntries(
+          Object.entries(player.buffs)
+            .filter(([, remaining]) => remaining > 0)
+            .map(([key, remaining]) => [key, round(remaining, 1)]),
+        ),
         luckCharges: player.luckCharges,
         thaw:
           player.buffs.qte > 0
             ? { taps: player.thawTaps, needed: player.thawNeeded }
             : null,
+        // Exam questions are sent once (examStart event / game:exam on join);
+        // snapshots only carry the countdown so the timer can tick locally.
         exam: player.exam
           ? {
               id: player.exam.id,
               remainingMs: Math.max(0, Math.round(player.exam.remaining * 1000)),
-              questions: player.exam.questions,
             }
           : null,
         cheat: player.cheat,
-        stats: { ...player.stats },
         progress: round(this.#progressFor(player), 3),
       })),
       effects: {

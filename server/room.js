@@ -376,6 +376,7 @@ export class RoomManager {
     room.resultEmitted = false;
     room.rematchReady = [false, false];
     room.lastTick = performance.now();
+    room.lastSnapshotAt = 0;
 
     this.#emitRoomUpdate(room);
     for (const player of room.players) {
@@ -396,12 +397,19 @@ export class RoomManager {
 
     room.game.update(dt);
     const events = room.game.takeEvents();
-    const snapshot = room.game.snapshot();
-    room.lastSnapshot = snapshot;
-
     if (events.length > 0) {
       this.io.to(room.code).emit('game:fx', { events });
     }
+
+    // Simulation still runs every tick; snapshots are rate-limited so a slow
+    // link is not flooded with 30 full state payloads per second.
+    const snapshotInterval = 1000 / Math.max(1, this.config.snapshotHz || 30);
+    const finishing = room.game.phase === 'finished' && !room.resultEmitted;
+    if (!finishing && now - (room.lastSnapshotAt || 0) < snapshotInterval - 2) return;
+
+    room.lastSnapshotAt = now;
+    const snapshot = room.game.snapshot();
+    room.lastSnapshot = snapshot;
     this.io.to(room.code).emit('game:snapshot', snapshot);
 
     if (snapshot.phase === 'finished' && !room.resultEmitted) {
@@ -441,6 +449,8 @@ export class RoomManager {
       const snapshot = { ...room.lastSnapshot, blocks: [] };
       this.io.to(player.socketId).emit('game:snapshot', snapshot);
     }
+    const exam = room.game?.examPayload(player.index);
+    if (exam) this.io.to(player.socketId).emit('game:exam', exam);
     if (room.result) {
       this.io.to(player.socketId).emit('game:over', room.result);
     }

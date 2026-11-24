@@ -1,4 +1,11 @@
-import { BLOCK, BLOCK_TYPES, CONFIG, SKILLS } from '/shared/config.js';
+import {
+  BLOCK,
+  BLOCK_TYPES,
+  CONFIG,
+  DIRECTIONS,
+  SKILLS,
+  oppositeDirection,
+} from '/shared/config.js';
 
 const FONT_MONO = '"SFMono-Regular", "Cascadia Mono", "Roboto Mono", Menlo, monospace';
 const TEAM = [
@@ -78,7 +85,7 @@ export class GameRenderer {
     this.targeting = null;
 
     this.viewPositions = this.#startViews();
-
+    this.localInput = null;
     this.particles = [];
     this.rings = [];
     this.playerTexts = [[], []];
@@ -105,6 +112,11 @@ export class GameRenderer {
     this.you = index;
   }
 
+  /** Raw direction currently held by this client, used to predict own movement. */
+  setLocalInput(direction) {
+    this.localInput = direction || null;
+  }
+
   setMap(map) {
     this.cols = map.cols;
     this.rows = map.rows;
@@ -123,6 +135,7 @@ export class GameRenderer {
     }
     this.targeting = null;
     this.viewPositions = this.#startViews();
+    this.localInput = null;
     this.measure();
     this.rebuildMap();
   }
@@ -161,7 +174,7 @@ export class GameRenderer {
 
   applyChanges(changes) {
     if (!this.cells) return;
-    let changed = false;
+    const touched = [];
     for (const change of changes) {
       const index = Number(change?.i);
       const block = Number(change?.block);
@@ -169,7 +182,7 @@ export class GameRenderer {
       const old = this.cells[index];
       if (old === block) continue;
       this.cells[index] = block;
-      changed = true;
+      touched.push(index);
       const col = index % this.cols;
       const row = Math.floor(index / this.cols);
 
@@ -189,7 +202,27 @@ export class GameRenderer {
         this.luckyCells.delete(index);
       }
     }
-    if (changed) this.rebuildMap();
+    if (touched.length > 0) this.redrawCells(touched);
+  }
+
+  /** Repaint only the cells that changed instead of the whole 72×28 sheet. */
+  redrawCells(indices) {
+    if (!this.cells || this.mapW <= 0 || this.mapH <= 0) return;
+    const ctx = this.mapCtx;
+    const tile = this.tile;
+    for (const index of indices) {
+      const col = index % this.cols;
+      const row = Math.floor(index / this.cols);
+      const x = col * tile;
+      const y = row * tile;
+      const block = this.cells[index];
+      if (block === BLOCK.EMPTY) this.drawTunnelTile(ctx, x, y, col, row);
+      else this.drawBlockTile(ctx, x, y, col, row, block);
+    }
+    // Start pads sit on top of the tile layer, so restore them if a mined or
+    // built cell happened to land in a spawn pocket.
+    this.drawStartPad(ctx, CONFIG.startCols[0], CONFIG.playerRows[0], 0);
+    this.drawStartPad(ctx, CONFIG.startCols[1], CONFIG.playerRows[1], 1);
   }
 
   measure() {
@@ -710,17 +743,148 @@ export class GameRenderer {
         const player = this.snapshot.players[i];
         if (!player || !Number.isFinite(player.x) || !Number.isFinite(player.y)) continue;
         const view = this.viewPositions[i];
-        const dx = player.x - view.x;
-        const dy = player.y - view.y;
-        if (!view.initialized || Math.abs(dx) + Math.abs(dy) > 3) {
+        if (!view) continue;
+        if (!view.initialized) {
           view.x = player.x;
           view.y = player.y;
           view.initialized = true;
           continue;
         }
-        const ease = 1 - Math.exp(-dt * 26);
+
+        // Own miner is simulated locally between snapshots so latency and
+        // jitter do not turn held movement into stutter.
+        if (i === this.you && this.#predictLocal(player, dt)) continue;
+
+        const dx = player.x - view.x;
+        const dy = player.y - view.y;
+        const snapDistance = i === this.you ? 1.4 : 3;
+        if (Math.abs(dx) + Math.abs(dy) > snapDistance) {
+          view.x = player.x;
+          view.y = player.y;
+          continue;
+        }
+        // Corrections are gentle for the local miner and only needed once the
+        // server disagrees by a meaningful amount.
+        const ease = 1 - Math.exp(-dt * (i === this.you ? 10 : 26));
         view.x += dx * ease;
         view.y += dy * ease;
+      }
+    }
+  }
+
+  /**
+   * Advance the local miner from the last authoritative snapshot using the
+   * held direction and the shared movement constants. Returns false when the
+   * caller should interpolate toward the server instead.
+   */
+  #predictLocal(player, dt) {
+    const view = this.viewPositions[this.you];
+    if (!view || !this.localInput || this.snapshot.phase !== 'playing') return false;
+    const dx = player.x - view.x;
+    const dy = player.y - view.y;
+    if (Math.abs(dx) + Math.abs(dy) > 1.5) return false;
+
+    const buffs = player.buffs || {};
+    if ((buffs.freeze || 0) > 0 || (buffs.qte || 0) > 0) return false;
+    let travel = this.localInput;
+    if ((buffs.hijack || 0) > 0) travel = player.facing || travel;
+    else if ((buffs.invert || 0) > 0) travel = oppositeDirection(travel) || travel;
+    const vector = DIRECTIONS[travel];
+    if (!vector) return false;
+
+    const speedMul =
+      ((buffs.overdrive || 0) > 0 ? 1.25 : 1) * ((buffs.cryo || 0) > 0 ? 0.6 : 1);
+    const speed = CONFIG.moveSpeed * speedMul;
+    const assist = CONFIG.laneAssistSpeed * dt;
+
+    if (vector.dx !== 0) {
+      const offset = Math.round(view.y - 0.5) + 0.5 - view.y;
+      if (Math.abs(offset) > 1e-4) {
+        this.#sweepAxis(view, 'y', clamp(offset, -assist, assist));
+      }
+      this.#sweepAxis(view, 'x', vector.dx * speed * dt);
+    } else {
+      const offset = Math.round(view.x - 0.5) + 0.5 - view.x;
+      if (Math.abs(offset) > 1e-4) {
+        this.#sweepAxis(view, 'x', clamp(offset, -assist, assist));
+      }
+      this.#sweepAxis(view, 'y', vector.dy * speed * dt);
+    }
+    return true;
+  }
+
+  /** Collision-only mirror of the server sweep, over the latest known cells. */
+  #sweepAxis(pos, axis, delta) {
+    if (!delta || !this.cells) return;
+    const h = CONFIG.playerHalfSize;
+    const cols = this.cols;
+    const rows = this.rows;
+    const maxX = cols - h;
+    const maxY = rows - h;
+    const substeps = Math.max(1, Math.ceil(Math.abs(delta) / 0.12));
+    const step = delta / substeps;
+
+    for (let i = 0; i < substeps; i += 1) {
+      if (axis === 'x') {
+        let nx = pos.x + step;
+        let hitEdge = false;
+        if (nx < h) {
+          nx = h;
+          hitEdge = true;
+        } else if (nx > maxX) {
+          nx = maxX;
+          hitEdge = true;
+        }
+        const edge = step > 0 ? nx + h : nx - h;
+        const col = Math.floor(edge - 1e-7);
+        const rowLow = clamp(Math.floor(pos.y - h + 1e-7), 0, rows - 1);
+        const rowHigh = clamp(Math.floor(pos.y + h - 1e-7), 0, rows - 1);
+        let blockedCol = null;
+        if (col >= 0 && col < cols) {
+          for (let row = rowLow; row <= rowHigh; row += 1) {
+            if (this.cells[row * cols + col] !== BLOCK.EMPTY) {
+              blockedCol = col;
+              break;
+            }
+          }
+        }
+        if (blockedCol !== null) {
+          const stop = step > 0 ? blockedCol - h - 1e-4 : blockedCol + 1 + h + 1e-4;
+          pos.x = step > 0 ? Math.min(nx, stop) : Math.max(nx, stop);
+          return;
+        }
+        pos.x = nx;
+        if (hitEdge) return;
+      } else {
+        let ny = pos.y + step;
+        let hitEdge = false;
+        if (ny < h) {
+          ny = h;
+          hitEdge = true;
+        } else if (ny > maxY) {
+          ny = maxY;
+          hitEdge = true;
+        }
+        const edge = step > 0 ? ny + h : ny - h;
+        const row = Math.floor(edge - 1e-7);
+        const colLow = clamp(Math.floor(pos.x - h + 1e-7), 0, cols - 1);
+        const colHigh = clamp(Math.floor(pos.x + h - 1e-7), 0, cols - 1);
+        let blockedRow = null;
+        if (row >= 0 && row < rows) {
+          for (let col = colLow; col <= colHigh; col += 1) {
+            if (this.cells[row * cols + col] !== BLOCK.EMPTY) {
+              blockedRow = row;
+              break;
+            }
+          }
+        }
+        if (blockedRow !== null) {
+          const stop = step > 0 ? blockedRow - h - 1e-4 : blockedRow + 1 + h + 1e-4;
+          pos.y = step > 0 ? Math.min(ny, stop) : Math.max(ny, stop);
+          return;
+        }
+        pos.y = ny;
+        if (hitEdge) return;
       }
     }
   }

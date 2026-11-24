@@ -301,16 +301,29 @@ test('developer effects reach the selected target over the socket', async () => 
     );
     assert.ok(fogSnapshot.players[1].buffs.fog > 0);
 
+    const examStartFx = waitFor(
+      host,
+      'game:fx',
+      (payload) => Boolean(
+        payload.events?.some(
+          (event) => event.type === 'examStart' && event.exam?.questions?.length,
+        ),
+      ),
+      3000,
+    );
     const exam = await ackFor(host, 'dev:effect', { effect: 'exam', target: 'self' });
     assert.equal(exam.ok, true);
+    const startEvent = (await examStartFx).events.find((event) => event.type === 'examStart');
+    assert.equal(startEvent.exam.questions.length, 3);
+    assert.equal(startEvent.exam.questions[0].options.length, 4);
+
     const examSnapshot = await waitFor(
       host,
       'game:snapshot',
-      (snapshot) => Boolean(snapshot.players?.[0]?.exam?.questions?.length),
+      (snapshot) => Boolean(snapshot.players?.[0]?.exam?.id),
       3000,
     );
-    assert.equal(examSnapshot.players[0].exam.questions.length, 3);
-    assert.equal(examSnapshot.players[0].exam.questions[0].options.length, 4);
+    assert.equal(examSnapshot.players[0].exam.questions, undefined);
   } finally {
     await closeServer(server, sockets);
   }

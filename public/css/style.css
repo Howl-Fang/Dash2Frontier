@@ -1236,8 +1236,8 @@ input:focus-visible {
 .buff-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  min-height: 24px;
+  gap: 7px;
+  min-height: 28px;
   margin-top: 6px;
 }
 
@@ -1248,14 +1248,14 @@ input:focus-visible {
 .buff-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 8px 4px 6px;
+  gap: 7px;
+  padding: 5px 10px 5px 7px;
   border: 1px solid var(--line);
   border-radius: 4px;
   background: rgba(9, 11, 16, 0.55);
   color: var(--muted-strong);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   cursor: help;
@@ -1264,13 +1264,13 @@ input:focus-visible {
 .buff-chip .chip-icon {
   display: inline-flex;
   flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
 }
 
 .buff-chip .chip-glyph {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.8;
@@ -1285,7 +1285,7 @@ input:focus-visible {
 
 .buff-chip .chip-value {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1;
 }
 

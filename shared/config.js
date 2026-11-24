@@ -411,7 +411,9 @@ export const CONFIG = Object.freeze({
   matchSeconds: 240,
   countdownSeconds: 3,
   tickMs: 33,
-  snapshotHz: 30,
+  // State broadcasts are throttled below the simulation rate and smoothed by
+  // client-side prediction, which keeps slow links comfortable.
+  snapshotHz: 20,
   // Continuous movement. Positions are measured in grid units and refer to the
   // centre of the miner's collision box.
   moveSpeed: 4.4,

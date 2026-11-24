@@ -430,8 +430,10 @@ test('snapshots report continuous positions, mining progress, and map changes on
   assert.equal(first.blocks[0].block, BLOCK.EMPTY);
   assert.ok(first.players[0].x > 1);
   assert.equal(first.players[0].y, 13.5);
-  assert.ok(first.players[0].stats.blocksMined >= 1);
-  assert.equal(first.players[0].stats.blocksMined, 1);
+  // Per-tick snapshots no longer carry lifetime stats; they stay on the game.
+  assert.equal(first.players[0].stats, undefined);
+  assert.equal(game.getPlayer(0).stats.blocksMined, 1);
+  assert.deepEqual(first.players[0].buffs, {});
 
   const second = game.snapshot();
   assert.equal(second.blocks.length, 0);
@@ -778,9 +780,12 @@ test('Exam rewards correct answers and punishes wrong ones', () => {
   assert.equal(exam.questions[0].options.length, 4);
 
   const snapshot = game.snapshot();
-  assert.equal(snapshot.players[0].exam.questions.length, 3);
-  assert.equal(snapshot.players[0].exam.questions[0].options.length, 4);
+  assert.equal(snapshot.players[0].exam.id, exam.id);
+  assert.equal(snapshot.players[0].exam.questions, undefined);
   assert.equal(snapshot.players[0].exam.answers, undefined);
+  const payload = game.examPayload(0);
+  assert.equal(payload.questions.length, 3);
+  assert.equal(payload.questions[0].options.length, 4);
 
   const passed = game.submitExam(0, exam.answers.slice());
   assert.equal(passed.ok, true);
