@@ -238,6 +238,18 @@ export class RoomManager {
     return room.game.castSkill(player.index, skillId, payload);
   }
 
+  setCheat(socket, enabled) {
+    const context = this.#contextForSocket(socket);
+    if (!context) {
+      return { ok: false, error: 'room', message: 'You are not in a room.' };
+    }
+    const { room, player } = context;
+    if (!room.game) {
+      return { ok: false, error: 'game', message: 'The match is not running.' };
+    }
+    return room.game.setCheat(player.index, enabled);
+  }
+
   rematch(socket) {
     const context = this.#contextForSocket(socket);
     if (!context) {

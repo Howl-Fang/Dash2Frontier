@@ -235,3 +235,39 @@ test('leaving a room closes it for the other player', async () => {
     await closeServer(server, sockets);
   }
 });
+
+test('a client can toggle cheat mode and freeze the rival', async () => {
+  const server = createGameServer({ config: fastConfig({ matchSeconds: 8 }) });
+  const port = await server.listen(0);
+  const sockets = [];
+  try {
+    const host = await connectClient(port);
+    const guest = await connectClient(port);
+    sockets.push(host, guest);
+
+    const created = await ackFor(host, 'room:create', { name: 'Ada' });
+    const hostPlaying = waitFor(
+      host,
+      'game:snapshot',
+      (snapshot) => snapshot.phase === 'playing',
+      4000,
+    );
+    await ackFor(guest, 'room:join', { code: created.code, name: 'Bo' });
+    await hostPlaying;
+
+    const enabled = await ackFor(host, 'game:cheat', { enabled: true });
+    assert.equal(enabled.ok, true);
+    const frozen = await waitFor(
+      host,
+      'game:snapshot',
+      (snapshot) => (snapshot.players?.[1]?.buffs?.freeze ?? 0) > 0,
+      3000,
+    );
+    assert.ok(frozen.players[1].buffs.freeze > 0);
+
+    const disabled = await ackFor(host, 'game:cheat', { enabled: false });
+    assert.equal(disabled.ok, true);
+  } finally {
+    await closeServer(server, sockets);
+  }
+});

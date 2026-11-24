@@ -86,6 +86,7 @@ const muteBtn = $('mute-btn');
 const canvas = $('game-canvas');
 const stageEl = $('stage');
 const flashEl = $('screen-flash');
+const cheatBadgeEl = $('cheat-badge');
 
 const resultOverlay = $('result-overlay');
 const resultKicker = $('result-kicker');
@@ -146,6 +147,8 @@ const state = {
   sentDir: null,
   skillButtons: new Map(),
   lastBreakSoundAt: 0,
+  cheat: false,
+  cheatPresses: [],
   targeting: null,
   targetingHover: null,
   targetingCells: [],
@@ -238,6 +241,7 @@ function showScreen(name) {
   for (const [key, element] of Object.entries(screens)) {
     element.classList.toggle('hidden', key !== name);
   }
+  updateCheatBadge();
   if (name === 'game') {
     requestAnimationFrame(() => renderer.measure());
   }
@@ -280,6 +284,66 @@ function addToast(text, tone = 'gold', timeout = 3800) {
     node.classList.add('is-out');
     window.setTimeout(() => node.remove(), 300);
   }, timeout);
+}
+
+/* ── Hidden cheat mode (triple-tap C) ───────────────────────────────── */
+
+const CHEAT_TRIPLE_WINDOW_MS = 700;
+
+function updateCheatBadge() {
+  if (!cheatBadgeEl) return;
+  cheatBadgeEl.classList.toggle('hidden', !(state.cheat && state.screen === 'game'));
+}
+
+function handleCheatKey() {
+  if (state.screen !== 'game' || state.phase !== 'playing' || state.result) return;
+  // While the mode is on, a single C press turns it straight back off.
+  if (state.cheat) {
+    state.cheatPresses = [];
+    requestCheat(false);
+    return;
+  }
+  const now = performance.now();
+  state.cheatPresses = state.cheatPresses.filter((at) => now - at <= CHEAT_TRIPLE_WINDOW_MS);
+  state.cheatPresses.push(now);
+  if (state.cheatPresses.length >= 3) {
+    state.cheatPresses = [];
+    requestCheat(true);
+  }
+}
+
+async function requestCheat(enabled) {
+  if (!state.connected || !socket) return;
+  const result = await emitAck('game:cheat', { enabled }, 2500);
+  if (!result.ok) {
+    addToast(result.message || 'Cheat mode failed.', 'danger', 2200);
+  }
+}
+
+function handleLuckyToast(event) {
+  const rivalName = state.players[1 - state.you]?.name || 'The rival';
+  const own = event.player === state.you;
+  const messages = {
+    soften: 'Soften — the surrounding 7×7 rock turned to soil.',
+    echo: 'Echo Form — two blocks per dig for 8s.',
+    wall: 'Wall — your whole column turned to obsidian.',
+    harden: 'Harden — the surrounding 3×3 turned to obsidian.',
+    invert: 'Invert — movement controls are reversed for 6s.',
+  };
+  const detail = messages[event.effect] || event.name || 'Lucky effect';
+  if (own) {
+    addToast(
+      `${event.good ? 'Lucky!' : 'Bad luck!'} ${detail}`,
+      event.good ? 'gold' : 'danger',
+      3400,
+    );
+  } else {
+    addToast(
+      `${rivalName} hit a lucky block: ${event.good ? 'good' : 'bad'} — ${detail}`,
+      event.good ? 'cyan' : 'gold',
+      3000,
+    );
+  }
 }
 
 /* ── Skills ─────────────────────────────────────────────────────────── */
@@ -748,6 +812,9 @@ function resetGameView() {
   state.phase = 'lobby';
   state.result = null;
   state.awaitingRematch = false;
+  state.cheat = false;
+  state.cheatPresses = [];
+  updateCheatBadge();
   state.wasCountdown = false;
   state.countdownValue = null;
   state.rematchReady = [false, false];
@@ -1001,6 +1068,8 @@ function onGameInit(payload) {
   state.pressedKeys = [];
   state.sentDir = null;
   state.rematchReady = [false, false];
+  state.cheat = false;
+  state.cheatPresses = [];
   updateSessionIdentity();
 
   hideCountdown();
@@ -1032,6 +1101,8 @@ function onSnapshot(snapshot) {
   state.seq = snapshot.seq;
   state.snapshot = snapshot;
   state.phase = snapshot.phase;
+  state.cheat = Boolean(snapshot.players?.[state.you]?.cheat);
+  updateCheatBadge();
   if (snapshot.phase === 'finished') {
     flushInput();
     cancelTargeting();
@@ -1081,6 +1152,33 @@ function onFx(payload) {
       case 'skill':
         handleSkillFx(event);
         break;
+      case 'lucky':
+        renderer.addLuckyBurst(event);
+        audio.lucky(event.good);
+        handleLuckyToast(event);
+        break;
+      case 'cheat': {
+        const rivalName = state.players[1 - state.you]?.name || 'The rival';
+        if (event.player === state.you) {
+          addToast(
+            event.enabled
+              ? 'Cheat mode on — instant drill, bedrock breaks, rival frozen.'
+              : 'Cheat mode off.',
+            event.enabled ? 'gold' : 'cyan',
+            3200,
+          );
+        } else {
+          addToast(
+            event.enabled
+              ? `${rivalName} enabled cheat mode — you are frozen in place!`
+              : `${rivalName} disabled cheat mode.`,
+            event.enabled ? 'danger' : 'gold',
+            3200,
+          );
+        }
+        if (event.enabled) flashScreen();
+        break;
+      }
       case 'cryoBurst':
         renderer.addCryoBurst(event);
         audio.cryoBurst(event.player === state.you, event.hit);
@@ -1216,6 +1314,24 @@ function updateHud(snapshot) {
       chip.textContent = `Chill ${player.buffs.cryo.toFixed(1)}s`;
       chips.push(chip);
     }
+    if (player.buffs?.echo > 0) {
+      const chip = document.createElement('span');
+      chip.className = 'buff-chip is-echo';
+      chip.textContent = `Echo ${player.buffs.echo.toFixed(1)}s`;
+      chips.push(chip);
+    }
+    if (player.buffs?.invert > 0) {
+      const chip = document.createElement('span');
+      chip.className = 'buff-chip is-invert';
+      chip.textContent = `Invert ${player.buffs.invert.toFixed(1)}s`;
+      chips.push(chip);
+    }
+    if (player.buffs?.freeze > 0) {
+      const chip = document.createElement('span');
+      chip.className = 'buff-chip is-frozen';
+      chip.textContent = `Frozen ${player.buffs.freeze.toFixed(1)}s`;
+      chips.push(chip);
+    }
     card.buffs.replaceChildren(...chips);
   }
 
@@ -1257,6 +1373,10 @@ function updateStatusLine(snapshot) {
     statusLine.textContent = 'DRILLS LOCKED';
   } else if (snapshot.phase === 'finished') {
     statusLine.textContent = 'MATCH OVER';
+  } else if (me?.buffs?.freeze > 0) {
+    statusLine.textContent = 'FROZEN IN PLACE — CANNOT MOVE OR DRILL';
+  } else if (me?.cheat) {
+    statusLine.textContent = 'CHEAT MODE — INSTANT DRILL · BEDROCK BREAKS';
   } else if (opponent?.connected === false) {
     statusLine.textContent = 'RIVAL OFFLINE — MATCH CONTINUES';
   } else if (me?.mining) {
@@ -1268,6 +1388,8 @@ function updateStatusLine(snapshot) {
     statusLine.textContent = 'OVERDRIVE — ×1.8 DRILL · ×1.25 MOVE';
   } else if (me?.buffs?.cryo > 0) {
     statusLine.textContent = 'CRYO LOCK — MOVEMENT AND DRILL SLOWED';
+  } else if (me?.buffs?.invert > 0) {
+    statusLine.textContent = 'CONTROLS INVERTED — DIRECTIONS ARE REVERSED';
   } else {
     statusLine.textContent = 'HOLD A DIRECTION TO MOVE · DRILLS AUTO-FIRE';
   }
@@ -1504,6 +1626,13 @@ function onKeyDown(event) {
   if (event.code === 'Escape' && state.targeting) {
     event.preventDefault();
     cancelTargeting();
+    return;
+  }
+
+  if (event.code === 'KeyC') {
+    event.preventDefault();
+    if (event.repeat) return;
+    handleCheatKey();
     return;
   }
 

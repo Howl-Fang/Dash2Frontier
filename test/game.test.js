@@ -37,6 +37,19 @@ const newGame = ({ map = makeMap(), config = testConfig(), names = ['P1', 'P2'] 
     config,
   });
 
+const luckyGame = ({
+  map = makeMap(),
+  config = testConfig(),
+  random = () => 0,
+  names = ['P1', 'P2'],
+} = {}) =>
+  new Game({
+    map,
+    players: names.map((name) => ({ name })),
+    config,
+    random,
+  });
+
 const set = (map, col, row, block) => {
   map.cells[cellIndex(col, row, map.cols)] = block;
 };
@@ -436,4 +449,155 @@ test('players can disconnect and later resume', () => {
   game.setDirection(0, 'right');
   advance(game, 0.2);
   assert.ok(game.getPlayer(0).x > 0.5);
+});
+
+/* ── Lucky blocks ───────────────────────────────────────────────────── */
+
+test('a lucky block digs quickly and Soften turns a 7×7 patch to soil', () => {
+  const map = makeMap();
+  for (let col = 0; col <= 4; col += 1) {
+    for (let row = 10; row <= 16; row += 1) set(map, col, row, BLOCK.GRANITE);
+  }
+  set(map, 0, 13, BLOCK.EMPTY);
+  set(map, 1, 13, BLOCK.LUCKY);
+
+  const game = luckyGame({ map });
+  const player = game.getPlayer(0);
+  game.setDirection(0, 'right');
+  advance(game, 0.35);
+
+  assert.equal(get(game, 1, 13), BLOCK.EMPTY);
+  const lucky = game.takeEvents().find((event) => event.type === 'lucky');
+  assert.ok(lucky);
+  assert.equal(lucky.effect, 'soften');
+  assert.equal(lucky.good, true);
+  assert.equal(get(game, 2, 14), BLOCK.SOIL);
+  // Baseline columns are never rewritten by a gamble.
+  assert.equal(get(game, 0, 12), BLOCK.GRANITE);
+  assert.ok(player.stats.blocksMined >= 1);
+});
+
+test('Echo Form breaks two blocks in a single dig', () => {
+  const map = makeMap();
+  set(map, 1, 13, BLOCK.LUCKY);
+  set(map, 2, 13, BLOCK.GRANITE);
+  set(map, 3, 13, BLOCK.GRANITE);
+  set(map, 4, 13, BLOCK.GRANITE);
+
+  const game = luckyGame({ map, random: () => 0.25 });
+  const player = game.getPlayer(0);
+  game.setDirection(0, 'right');
+  advance(game, 0.4);
+
+  assert.equal(get(game, 1, 13), BLOCK.EMPTY);
+  assert.ok(player.buffs.echo > 0);
+  // The lucky dig itself rolls Echo and instantly clears the next face.
+  assert.equal(get(game, 2, 13), BLOCK.EMPTY);
+
+  assert.ok(advanceUntil(game, () => get(game, 3, 13) === BLOCK.EMPTY, 6));
+  assert.equal(get(game, 4, 13), BLOCK.EMPTY);
+  const breaks = game.takeEvents().filter((event) => event.type === 'blockBreak');
+  assert.ok(breaks.some((event) => event.method === 'echo'));
+});
+
+test('Harden turns the surrounding 3×3 into obsidian', () => {
+  const map = makeMap();
+  for (let dc = -1; dc <= 1; dc += 1) {
+    for (let dr = -1; dr <= 1; dr += 1) {
+      set(map, 1 + dc, 13 + dr, BLOCK.SOIL);
+    }
+  }
+  set(map, 0, 13, BLOCK.EMPTY);
+  set(map, 1, 13, BLOCK.LUCKY);
+
+  const game = luckyGame({ map, random: () => 0.65 });
+  game.setDirection(0, 'right');
+  advance(game, 0.4);
+
+  const lucky = game.takeEvents().find((event) => event.type === 'lucky');
+  assert.ok(lucky);
+  assert.equal(lucky.effect, 'harden');
+  assert.equal(lucky.good, false);
+  assert.equal(get(game, 2, 14), BLOCK.OBSIDIAN);
+  assert.equal(get(game, 0, 12), BLOCK.SOIL);
+});
+
+test('Wall turns the miner column into obsidian except their own cell', () => {
+  const map = makeMap();
+  set(map, 2, 13, BLOCK.LUCKY);
+
+  const game = luckyGame({ map, random: () => 0.45 });
+  const player = game.getPlayer(0);
+  game.setDirection(0, 'right');
+  assert.ok(advanceUntil(game, () => get(game, 2, 13) === BLOCK.EMPTY, 3));
+
+  const lucky = game.takeEvents().find((event) => event.type === 'lucky');
+  assert.ok(lucky);
+  assert.equal(lucky.effect, 'wall');
+  assert.equal(Math.floor(player.x), 1);
+  assert.equal(get(game, 1, 5), BLOCK.OBSIDIAN);
+  assert.equal(get(game, 1, 12), BLOCK.OBSIDIAN);
+  assert.equal(get(game, 1, 13), BLOCK.EMPTY);
+  assert.equal(get(game, 0, 5), BLOCK.EMPTY);
+});
+
+test('Invert reverses movement and facing for a timed window', () => {
+  const map = makeMap();
+  set(map, 2, 13, BLOCK.LUCKY);
+
+  const game = luckyGame({ map, random: () => 0.9 });
+  const player = game.getPlayer(0);
+  game.setDirection(0, 'right');
+  assert.ok(advanceUntil(game, () => player.buffs.invert > 0, 3));
+
+  const lucky = game.takeEvents().find((event) => event.type === 'lucky');
+  assert.ok(lucky);
+  assert.equal(lucky.effect, 'invert');
+
+  const xBefore = player.x;
+  advance(game, 0.15);
+  assert.equal(player.facing, 'left');
+  assert.ok(player.x < xBefore);
+});
+
+/* ── Cheat mode ─────────────────────────────────────────────────────── */
+
+test('cheat mode instantly mines bedrock and hard-freezes the rival', () => {
+  const map = makeMap();
+  set(map, 1, 13, BLOCK.BEDROCK);
+  set(map, 2, 13, BLOCK.BEDROCK);
+  const game = newGame({ map });
+  const rival = game.getPlayer(1);
+
+  const enabled = game.setCheat(0, true);
+  assert.equal(enabled.ok, true);
+  assert.ok(rival.buffs.freeze > 0);
+  assert.ok(game.takeEvents().some((event) => event.type === 'cheat' && event.enabled));
+
+  game.setDirection(0, 'right');
+  game.setDirection(1, 'right');
+  advance(game, 0.1);
+  assert.equal(get(game, 1, 13), BLOCK.EMPTY);
+  assert.equal(rival.x, 11.5);
+
+  assert.ok(advanceUntil(game, () => get(game, 2, 13) === BLOCK.EMPTY, 2));
+
+  advance(game, 6.2);
+  assert.equal(rival.buffs.freeze, 0);
+  assert.ok(rival.x > 11.5);
+});
+
+test('turning cheat mode off restores normal mining rules', () => {
+  const map = makeMap();
+  set(map, 1, 13, BLOCK.BEDROCK);
+  const game = newGame({ map });
+
+  assert.equal(game.setCheat(0, true).ok, true);
+  assert.equal(game.setCheat(0, false).ok, true);
+  assert.equal(game.getPlayer(0).cheat, false);
+
+  game.setDirection(0, 'right');
+  advance(game, 0.5);
+  assert.equal(get(game, 1, 13), BLOCK.BEDROCK);
+  assert.equal(game.getPlayer(0).mining, null);
 });

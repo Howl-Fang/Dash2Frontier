@@ -250,6 +250,46 @@ export class GameAudio {
     });
   }
 
+  lucky(good = true) {
+    if (!this.enabled) return;
+    if (good) {
+      [660, 880, 1174].forEach((freq, index) => {
+        this.tone({
+          freq,
+          duration: 0.16,
+          type: 'triangle',
+          volume: 0.055,
+          delay: index * 0.06,
+        });
+      });
+      this.noise({
+        duration: 0.24,
+        volume: 0.045,
+        filterType: 'highpass',
+        frequency: 2200,
+        delay: 0.05,
+      });
+    } else {
+      [330, 262, 196].forEach((freq, index) => {
+        this.tone({
+          freq,
+          endFreq: freq * 0.72,
+          duration: 0.2,
+          type: 'sawtooth',
+          volume: 0.045,
+          delay: index * 0.07,
+        });
+      });
+      this.noise({
+        duration: 0.3,
+        volume: 0.06,
+        filterType: 'lowpass',
+        frequency: 900,
+        endFrequency: 180,
+      });
+    }
+  }
+
   countdown(value) {
     if (!this.enabled) return;
     const freq = value === 3 ? 440 : value === 2 ? 520 : 620;

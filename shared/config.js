@@ -9,6 +9,7 @@ export const BLOCK = Object.freeze({
   OBSIDIAN: 3,
   BEDROCK: 4,
   BARRICADE: 5,
+  LUCKY: 6,
 });
 
 // Indexed by block id. `hardness` is used by the renderer for texture detail.
@@ -66,6 +67,16 @@ export const BLOCK_TYPES = Object.freeze([
     edge: '#6e460b',
     accent: '#ffd76a',
     hardness: 3,
+  },
+  {
+    id: BLOCK.LUCKY,
+    name: 'Lucky Block',
+    // Deliberately very quick: the gamble is the effect, not the dig time.
+    mineTime: 0.3,
+    color: '#3d2a63',
+    edge: '#1b1233',
+    accent: '#ffd76a',
+    hardness: 0,
   },
 ]);
 
@@ -133,6 +144,53 @@ export const SKILLS = Object.freeze({
 
 export const SKILL_ORDER = Object.freeze(['build', 'blast', 'overdrive', 'cryo']);
 
+// Lucky blocks roll one of these effects when they are mined. `radius` is in
+// cells around the block (1 = 3×3, 3 = 7×7); timed buffs live on the player.
+export const LUCKY_EFFECTS = Object.freeze({
+  soften: {
+    id: 'soften',
+    name: 'Soften',
+    good: true,
+    radius: 3,
+    blurb: '7×7 rock around the block turns to soil.',
+  },
+  echo: {
+    id: 'echo',
+    name: 'Echo Form',
+    good: true,
+    duration: 8,
+    blurb: 'Two blocks break per dig for 8s.',
+  },
+  wall: {
+    id: 'wall',
+    name: 'Wall',
+    good: true,
+    blurb: 'Your whole column turns to obsidian, except your cell.',
+  },
+  harden: {
+    id: 'harden',
+    name: 'Harden',
+    good: false,
+    radius: 1,
+    blurb: '3×3 rock around the block turns to obsidian.',
+  },
+  invert: {
+    id: 'invert',
+    name: 'Invert',
+    good: false,
+    duration: 6,
+    blurb: 'Movement controls are reversed for 6s.',
+  },
+});
+
+export const LUCKY_EFFECT_ORDER = Object.freeze([
+  'soften',
+  'echo',
+  'wall',
+  'harden',
+  'invert',
+]);
+
 export const CONFIG = Object.freeze({
   port: 8000,
   cols: 72,
@@ -167,6 +225,10 @@ export const CONFIG = Object.freeze({
     perBlock: 2,
     perBlastBlock: 1,
   }),
+  // Hidden cheat mode (triple-tap C). Freezing is a hard immobilise, not Cryo.
+  cheat: Object.freeze({
+    freezeSeconds: 6,
+  }),
   map: Object.freeze({
     bedrockChance: 0.075,
     veinCount: 10,
@@ -181,6 +243,12 @@ export const CONFIG = Object.freeze({
     clusterCount: 9,
     clusterMin: 3,
     clusterMax: 8,
+    // Lucky blocks are seeded in the top and bottom stretches of the map.
+    luckyCount: 6,
+    luckyBands: Object.freeze([
+      Object.freeze([1, 6]),
+      Object.freeze([21, 26]),
+    ]),
     minPathSeconds: 140,
     maxPathSeconds: 210,
     minDetourExtraCells: 3,

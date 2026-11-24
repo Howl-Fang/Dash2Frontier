@@ -64,6 +64,7 @@ export class GameRenderer {
     this.mapCanvas = document.createElement('canvas');
     this.mapCtx = this.mapCanvas.getContext('2d');
     this.barricadeCells = new Set();
+    this.luckyCells = new Set();
     this.targeting = null;
 
     this.viewPositions = this.#startViews();
@@ -103,8 +104,10 @@ export class GameRenderer {
     this.rings = [];
     this.shake = 0;
     this.barricadeCells.clear();
+    this.luckyCells.clear();
     for (let i = 0; i < this.cells.length; i += 1) {
       if (this.cells[i] === BLOCK.BARRICADE) this.barricadeCells.add(i);
+      if (this.cells[i] === BLOCK.LUCKY) this.luckyCells.add(i);
     }
     this.targeting = null;
     this.viewPositions = this.#startViews();
@@ -161,11 +164,17 @@ export class GameRenderer {
       if (block === BLOCK.EMPTY && old !== BLOCK.EMPTY) {
         this.spawnBlockBurst(col, row, old);
         this.barricadeCells.delete(index);
+        this.luckyCells.delete(index);
       } else if (block === BLOCK.BARRICADE) {
         this.spawnBarricadeDust(col, row);
         this.barricadeCells.add(index);
+        this.luckyCells.delete(index);
+      } else if (block === BLOCK.LUCKY) {
+        this.luckyCells.add(index);
+        this.barricadeCells.delete(index);
       } else {
         this.barricadeCells.delete(index);
+        this.luckyCells.delete(index);
       }
     }
     if (changed) this.rebuildMap();
@@ -377,6 +386,40 @@ export class GameRenderer {
           const py = by + 2 + hash2(col, row + i * 5, this.seed + 53) * (bh - 5);
           ctx.fillRect(Math.round(px), Math.round(py), Math.max(1, Math.round(tile * 0.055)), Math.max(1, Math.round(tile * 0.055)));
         }
+      } else if (block === BLOCK.LUCKY) {
+        const glow = ctx.createRadialGradient(
+          bx + bw / 2,
+          by + bh / 2,
+          0,
+          bx + bw / 2,
+          by + bh / 2,
+          bw * 0.62,
+        );
+        glow.addColorStop(0, 'rgba(255, 215, 106, 0.36)');
+        glow.addColorStop(1, 'rgba(255, 215, 106, 0)');
+        ctx.fillStyle = glow;
+        ctx.fillRect(bx, by, bw, bh);
+
+        ctx.strokeStyle = '#ffd76a';
+        ctx.lineWidth = Math.max(1, tile * 0.07);
+        ctx.strokeRect(bx + 1, by + 1, bw - 2, bh - 2);
+
+        ctx.fillStyle = 'rgba(255, 215, 106, 0.18)';
+        for (let i = 0; i < 2; i += 1) {
+          const px = bx + 3 + hash2(col + i * 7, row, this.seed + 61) * (bw - 8);
+          const py = by + 3 + hash2(col, row + i * 9, this.seed + 67) * (bh - 8);
+          ctx.fillRect(Math.round(px), Math.round(py), Math.max(1, Math.round(tile * 0.08)), Math.max(1, Math.round(tile * 0.08)));
+        }
+
+        if (tile >= 10) {
+          ctx.fillStyle = '#ffe9a8';
+          ctx.font = `700 ${Math.max(6, Math.round(tile * 0.6))}px ${FONT_MONO}`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('?', bx + bw / 2, by + bh / 2 + 0.5);
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'alphabetic';
+        }
       }
     }
 
@@ -453,6 +496,18 @@ export class GameRenderer {
     this.addRing(event.x, event.y, this.tile * 0.15, this.tile * radius * 0.55, '#ffffff', 0.4);
     this.addSnow(event.x, event.y, event.hit ? 28 : 16);
     this.addShake(event.hit ? 3.2 : 1.6);
+  }
+
+  addLuckyBurst(event) {
+    if (!event) return;
+    const good = event.good !== false;
+    const color = good ? '#ffe08a' : '#ff7a6a';
+    const x = event.col + 0.5;
+    const y = event.row + 0.5;
+    this.addRing(x, y, this.tile * 0.2, this.tile * (good ? 2.4 : 1.5), color, 0.6);
+    this.addRing(x, y, this.tile * 0.15, this.tile * 0.9, '#ffffff', 0.35);
+    this.addSparks(x, y, color, good ? 18 : 12, good ? 3.2 : 2.2);
+    this.addShake(good ? 2.4 : 3.4);
   }
 
   addBlocked(event) {
@@ -665,6 +720,7 @@ export class GameRenderer {
 
     this.drawGates(ctx);
     this.drawBarricadePulse(ctx);
+    this.drawLuckyPulse(ctx);
     this.drawDigOverlays(ctx);
     this.drawCryoTelegraphs(ctx);
     this.drawTargeting(ctx);
@@ -1059,6 +1115,25 @@ export class GameRenderer {
     ctx.restore();
   }
 
+  drawLuckyPulse(ctx) {
+    if (!this.cells || this.luckyCells.size === 0) return;
+    const pulse = 0.32 + 0.34 * Math.sin(this.time * 3.4);
+    const tile = this.tile;
+    ctx.save();
+    ctx.strokeStyle = `rgba(255, 215, 106, ${pulse})`;
+    ctx.lineWidth = Math.max(1, tile * 0.07);
+    ctx.setLineDash([Math.max(2, tile * 0.2), Math.max(2, tile * 0.16)]);
+    ctx.lineDashOffset = -this.time * 16;
+    for (const index of this.luckyCells) {
+      const col = index % this.cols;
+      const row = Math.floor(index / this.cols);
+      const x = this.offsetX + col * tile + 1.5;
+      const y = this.offsetY + row * tile + 1.5;
+      ctx.strokeRect(x, y, tile - 3, tile - 3);
+    }
+    ctx.restore();
+  }
+
   drawDigOverlays(ctx) {
     const players = this.snapshot?.players;
     if (!players) return;
@@ -1177,6 +1252,37 @@ export class GameRenderer {
         const start = this.time * 5 + i * 2.1;
         ctx.beginPath();
         ctx.arc(x, y, tile * (0.55 + (start % 1) * 0.28), start, start + 0.9);
+        ctx.stroke();
+      }
+    }
+
+    if (player.buffs?.freeze > 0) {
+      // A hard cheat-mode freeze: a red cage with frost shards, not the blue
+      // Cryo slow aura.
+      const cage = 0.55 + 0.25 * Math.sin(this.time * 6);
+      ctx.strokeStyle = `rgba(255, 120, 96, ${cage})`;
+      ctx.lineWidth = Math.max(1, tile * 0.06);
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.arc(x, y, tile * 0.66, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(214, 240, 255, 0.8)';
+      for (let i = 0; i < 4; i += 1) {
+        const angle = (Math.PI / 2) * i + Math.PI / 4;
+        const px = x + Math.cos(angle) * tile * 0.55;
+        const py = y + Math.sin(angle) * tile * 0.55;
+        ctx.fillRect(px - 1, py - 1, 2.5, 2.5);
+      }
+    }
+
+    if (player.cheat) {
+      ctx.strokeStyle = 'rgba(255, 215, 106, 0.6)';
+      ctx.lineWidth = Math.max(1, tile * 0.05);
+      const spin = this.time * 4;
+      for (let i = 0; i < 3; i += 1) {
+        ctx.beginPath();
+        ctx.arc(x, y, tile * (0.52 + i * 0.1), spin + i * 2.1, spin + i * 2.1 + 1.1);
         ctx.stroke();
       }
     }

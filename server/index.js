@@ -113,6 +113,15 @@ export function createGameServer({ config = {} } = {}) {
       }
     });
 
+    socket.on('game:cheat', (payload, ack) => {
+      try {
+        callAck(ack, manager.setCheat(socket, payload?.enabled));
+      } catch (error) {
+        console.error('game:cheat failed', error);
+        callAck(ack, { ok: false, error: 'server', message: 'Could not toggle cheat mode.' });
+      }
+    });
+
     socket.on('disconnect', () => {
       manager.handleDisconnect(socket);
     });

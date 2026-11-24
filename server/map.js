@@ -167,6 +167,46 @@ function sealNonGoalBaselines(cells, config) {
   }
 }
 
+/**
+ * Scatter lucky blocks through the top and bottom stretches of the map. They
+ * only replace diggable rock, never bedrock or an already-open cell, and every
+ * placement is mirrored 180° so both miners get the same gambles.
+ */
+function addLuckyBlocks(cells, cols, rows, random, mapConfig) {
+  const bands = mapConfig.luckyBands || CONFIG.map.luckyBands;
+  const count = mapConfig.luckyCount ?? 0;
+  if (count <= 0 || !Array.isArray(bands) || bands.length === 0) return;
+
+  const half = Math.floor(cols / 2);
+  // Stay away from the gate alcoves on the outer two columns.
+  const minCol = Math.min(2, half - 1);
+  const maxCol = Math.max(minCol, half - 2);
+  const placed = new Set();
+  let placedCount = 0;
+  let attempts = 0;
+
+  while (placedCount < count && attempts < count * 40) {
+    attempts += 1;
+    const band = bands[Math.floor(random() * bands.length)];
+    const row = Math.min(rows - 1, Math.max(0, randomInt(random, band[0], band[1])));
+    const col = randomInt(random, minCol, maxCol);
+    const index = cellIndex(col, row, cols);
+    if (placed.has(index)) continue;
+    const block = cells[index];
+    if (block === BLOCK.EMPTY || block === BLOCK.BEDROCK || block === BLOCK.LUCKY) continue;
+
+    const mirrorCol = cols - 1 - col;
+    const mirrorRow = rows - 1 - row;
+    const mirrorIndex = cellIndex(mirrorCol, mirrorRow, cols);
+
+    cells[index] = BLOCK.LUCKY;
+    cells[mirrorIndex] = BLOCK.LUCKY;
+    placed.add(index);
+    placed.add(mirrorIndex);
+    placedCount += 1;
+  }
+}
+
 function canPass(block) {
   return block !== BLOCK.BEDROCK;
 }
@@ -352,6 +392,7 @@ function buildRawMap(cols, rows, random, config) {
   carveStartPockets(cells, cols, rows, config.startPocket);
   carveGoalAlcoves(cells, config);
   sealNonGoalBaselines(cells, config);
+  addLuckyBlocks(cells, cols, rows, random, mapConfig);
   return { cols, rows, cells };
 }
 

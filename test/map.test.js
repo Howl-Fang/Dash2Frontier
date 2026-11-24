@@ -156,3 +156,26 @@ test('mulberry32 is deterministic and in range', () => {
     assert.ok(value >= 0 && value < 1);
   }
 });
+
+test('lucky blocks spawn only in the top and bottom stretches and stay symmetric', () => {
+  for (const seed of [1, 7, 42]) {
+    const map = generateMap({ seed });
+    const lucky = [];
+    for (let col = 0; col < map.cols; col += 1) {
+      for (let row = 0; row < map.rows; row += 1) {
+        if (map.cells[cellIndex(col, row, map.cols)] === BLOCK.LUCKY) {
+          lucky.push([col, row]);
+        }
+      }
+    }
+    assert.ok(lucky.length > 0, `seed ${seed} should seed lucky blocks`);
+    assert.equal(lucky.length % 2, 0, 'lucky blocks are mirrored in pairs');
+    for (const [col, row] of lucky) {
+      const inTop = row >= 1 && row <= 6;
+      const inBottom = row >= 21 && row <= 26;
+      assert.ok(inTop || inBottom, `seed ${seed} lucky block at (${col}, ${row}) is off the top/bottom bands`);
+      assert.ok(col >= 2 && col <= map.cols - 3, `seed ${seed} lucky block sits on a gate column`);
+    }
+    assert.equal(isSymmetric(map), true);
+  }
+});

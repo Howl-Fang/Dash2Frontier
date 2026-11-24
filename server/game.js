@@ -3,11 +3,14 @@ import {
   BLOCK_TYPES,
   CONFIG,
   DIRECTIONS,
+  LUCKY_EFFECTS,
+  LUCKY_EFFECT_ORDER,
   SKILLS,
   distanceToGoalZone,
   goalDirectionForPlayer,
   isGoalRow,
   isGoalTriggerCell,
+  oppositeDirection,
 } from '../shared/config.js';
 import { cellIndex } from './map.js';
 
@@ -31,7 +34,7 @@ function resolvedConfig(overrides = {}) {
 }
 
 export class Game {
-  constructor({ map, players, config = {} }) {
+  constructor({ map, players, config = {}, random = Math.random }) {
     if (!map || !Array.isArray(map.cells)) {
       throw new Error('Game requires a map');
     }
@@ -40,6 +43,7 @@ export class Game {
     }
 
     this.config = resolvedConfig(config);
+    this.random = random;
     this.map = {
       cols: map.cols,
       rows: map.rows,
@@ -82,7 +86,8 @@ export class Game {
       blockedCooldown: 0,
       energy: energy.start,
       cooldowns: Object.fromEntries(Object.keys(SKILLS).map((skill) => [skill, 0])),
-      buffs: { overdrive: 0, cryo: 0 },
+      buffs: { overdrive: 0, cryo: 0, echo: 0, invert: 0, freeze: 0 },
+      cheat: false,
       stats: { blocksMined: 0, skillsUsed: 0, cellsMoved: 0 },
     };
   }
@@ -109,14 +114,50 @@ export class Game {
     }
     if (!DIRECTIONS[direction]) return { ok: false, error: 'direction' };
 
-    if (player.facing !== direction) {
+    // The Invert debuff flips the face as well, so the drill follows the
+    // direction the miner actually walks in.
+    const facing = player.buffs.invert > 0 ? oppositeDirection(direction) : direction;
+    if (player.facing !== facing) {
       // Turning away abandons the current block. The next tick picks the new
       // face in front of the miner, starting from zero progress.
-      player.facing = direction;
+      player.facing = facing;
       player.mining = null;
     }
     player.heldDir = direction;
     return { ok: true };
+  }
+
+  /**
+   * Hidden cheat mode. Enabling it grants instant mining and bedrock breaking
+   * for as long as it stays on, and hard-freezes the rival for a short burst.
+   */
+  setCheat(index, enabled) {
+    const player = this.players[index];
+    if (!player) return { ok: false, error: 'inactive', message: 'No miner there.' };
+    if (this.phase !== 'playing') {
+      return { ok: false, error: 'phase', message: 'The match is not running.' };
+    }
+    const next = Boolean(enabled);
+    if (player.cheat === next) return { ok: true, cheat: next };
+
+    player.cheat = next;
+    if (next) {
+      const freeze = this.config.cheat?.freezeSeconds ?? 0;
+      for (const other of this.players) {
+        if (other.index !== index) {
+          other.buffs.freeze = Math.max(other.buffs.freeze, freeze);
+        }
+      }
+      this.pendingEvents.push({
+        type: 'cheat',
+        player: index,
+        enabled: true,
+        freezeMs: Math.round(freeze * 1000),
+      });
+    } else {
+      this.pendingEvents.push({ type: 'cheat', player: index, enabled: false, freezeMs: 0 });
+    }
+    return { ok: true, cheat: next };
   }
 
   update(dt) {
@@ -149,6 +190,9 @@ export class Game {
       }
       player.buffs.overdrive = Math.max(0, player.buffs.overdrive - dt);
       player.buffs.cryo = Math.max(0, player.buffs.cryo - dt);
+      player.buffs.echo = Math.max(0, player.buffs.echo - dt);
+      player.buffs.invert = Math.max(0, player.buffs.invert - dt);
+      player.buffs.freeze = Math.max(0, player.buffs.freeze - dt);
       player.blockedCooldown = Math.max(0, player.blockedCooldown - dt);
       player.energy = Math.min(
         energyConfig.max,
@@ -170,9 +214,20 @@ export class Game {
   }
 
   #updatePlayer(player, dt) {
+    // Cheat-mode freeze is a hard stop: no movement, no mining.
+    if (player.buffs.freeze > 0) {
+      player.mining = null;
+      return;
+    }
+
     if (player.heldDir) {
-      const direction = DIRECTIONS[player.heldDir];
+      const effective = player.buffs.invert > 0 ? oppositeDirection(player.heldDir) : player.heldDir;
+      const direction = DIRECTIONS[effective];
       if (direction) {
+        if (player.facing !== effective) {
+          player.facing = effective;
+          player.mining = null;
+        }
         // Gentle lane centring makes one-cell tunnels forgiving without
         // snapping the player to the grid.
         const assist = this.config.laneAssistSpeed * dt;
@@ -208,7 +263,7 @@ export class Game {
               player: player.index,
               x: round(player.x, 3),
               y: round(player.y, 3),
-              dir: player.heldDir,
+              dir: effective,
             });
           }
         }
@@ -336,7 +391,7 @@ export class Game {
       y: round(player.y, 3),
       col,
       row,
-      dir: player.heldDir,
+      dir: player.facing,
       reason,
     });
   }
@@ -395,7 +450,8 @@ export class Game {
 
     if (col < 0 || col >= this.map.cols || row < 0 || row >= this.map.rows) return null;
     const block = this.map.cells[cellIndex(col, row, this.map.cols)];
-    if (!isDiggable(block)) return null;
+    // Cheat mode lets the miner chew through bedrock as well.
+    if (!isDiggable(block) && !(player.cheat && block === BLOCK.BEDROCK)) return null;
     return { col, row, block };
   }
 
@@ -412,6 +468,11 @@ export class Game {
       current.row !== candidate.row ||
       current.block !== candidate.block
     ) {
+      if (player.cheat) {
+        player.mining = null;
+        this.#breakTarget(player, candidate);
+        return;
+      }
       player.mining = {
         ...candidate,
         baseTime: BLOCK_TYPES[candidate.block].mineTime,
@@ -434,14 +495,43 @@ export class Game {
       return;
     }
 
+    // Cheat mode skips the timer entirely: one block per tick.
+    if (player.cheat) {
+      player.mining = null;
+      this.#breakTarget(player, current);
+      return;
+    }
+
     current.elapsed += dt * this.#mineMultiplier(player);
     if (current.elapsed < current.baseTime) return;
 
-    const { col, row, block } = current;
     player.mining = null;
     // The miner stays exactly where they are. Holding the direction is what
     // walks them into the cleared cell afterwards.
-    this.#breakBlock(index, col, row, block, player, 'dig');
+    this.#breakTarget(player, current);
+  }
+
+  /**
+   * Break the current face, plus one extra block straight ahead while the Echo
+   * Form buff is active ("two blocks per dig").
+   */
+  #breakTarget(player, target) {
+    const index = cellIndex(target.col, target.row, this.map.cols);
+    if (!this.#breakBlock(index, target.col, target.row, target.block, player, 'dig')) {
+      return;
+    }
+    if (player.buffs.echo <= 0) return;
+    const direction = DIRECTIONS[player.facing];
+    if (!direction) return;
+
+    const col = target.col + direction.dc;
+    const row = target.row + direction.dr;
+    if (!this.#isValidCell(col, row)) return;
+    const echoIndex = cellIndex(col, row, this.map.cols);
+    const echoBlock = this.map.cells[echoIndex];
+    if (echoBlock === BLOCK.EMPTY) return;
+    if (echoBlock === BLOCK.BEDROCK && !player.cheat) return;
+    this.#breakBlock(echoIndex, col, row, echoBlock, player, 'echo');
   }
 
   #breakBlock(index, col, row, block, player, method, energyGain = this.config.energy.perBlock) {
@@ -458,7 +548,89 @@ export class Game {
       block,
       method,
     });
+    // Blasting never detonates a lucky block; only actually digging it does.
+    if (block === BLOCK.LUCKY && method !== 'blast') {
+      this.#triggerLucky(player, col, row);
+    }
     return true;
+  }
+
+  #isBaselineColumn(col) {
+    return col === 0 || col === this.map.cols - 1;
+  }
+
+  #playersOverlapCell(col, row) {
+    return this.players.some((player) => this.#cellOverlapsPlayer(player, col, row));
+  }
+
+  #setBlock(col, row, block, changed) {
+    const index = cellIndex(col, row, this.map.cols);
+    if (this.map.cells[index] === block) return false;
+    this.map.cells[index] = block;
+    this.pendingChanges.push({ i: index, block });
+    if (Array.isArray(changed)) changed.push({ col, row, block });
+    return true;
+  }
+
+  /**
+   * Roll one of the five lucky effects. Terrain effects rewrite the map,
+   * buffs sit on the miner. Baseline columns and occupied cells are always
+   * left alone so a gamble can never seal a gate or bury a miner.
+   */
+  #triggerLucky(player, col, row) {
+    const roll = Number(this.random());
+    const cursor = Number.isFinite(roll) ? roll : 0;
+    const pick = Math.min(
+      LUCKY_EFFECT_ORDER.length - 1,
+      Math.max(0, Math.floor(cursor * LUCKY_EFFECT_ORDER.length)),
+    );
+    const effectId = LUCKY_EFFECT_ORDER[pick];
+    const effect = LUCKY_EFFECTS[effectId];
+    const changed = [];
+
+    if (effectId === 'soften' || effectId === 'harden') {
+      const block = effectId === 'soften' ? BLOCK.SOIL : BLOCK.OBSIDIAN;
+      const radius = effect.radius;
+      for (let dc = -radius; dc <= radius; dc += 1) {
+        for (let dr = -radius; dr <= radius; dr += 1) {
+          const targetCol = col + dc;
+          const targetRow = row + dr;
+          if (!this.#isValidCell(targetCol, targetRow)) continue;
+          if (this.#isBaselineColumn(targetCol)) continue;
+          if (this.#playersOverlapCell(targetCol, targetRow)) continue;
+          const index = cellIndex(targetCol, targetRow, this.map.cols);
+          const current = this.map.cells[index];
+          if (current === BLOCK.EMPTY || current === BLOCK.BEDROCK) continue;
+          this.#setBlock(targetCol, targetRow, block, changed);
+        }
+      }
+    } else if (effectId === 'wall') {
+      const column = Math.floor(player.x);
+      if (!this.#isBaselineColumn(column)) {
+        const playerRow = Math.floor(player.y);
+        for (let targetRow = 0; targetRow < this.map.rows; targetRow += 1) {
+          if (targetRow === playerRow) continue;
+          if (this.#playersOverlapCell(column, targetRow)) continue;
+          const index = cellIndex(column, targetRow, this.map.cols);
+          if (this.map.cells[index] === BLOCK.BEDROCK) continue;
+          this.#setBlock(column, targetRow, BLOCK.OBSIDIAN, changed);
+        }
+      }
+    } else if (effectId === 'echo' || effectId === 'invert') {
+      player.buffs[effectId] = Math.max(player.buffs[effectId], effect.duration);
+    }
+
+    this.pendingEvents.push({
+      type: 'lucky',
+      player: player.index,
+      col,
+      row,
+      effect: effectId,
+      name: effect.name,
+      good: effect.good,
+      duration: effect.duration ?? null,
+      changes: changed.length,
+    });
   }
 
   #checkBreach(player) {
@@ -784,7 +956,11 @@ export class Game {
         buffs: {
           overdrive: round(player.buffs.overdrive, 1),
           cryo: round(player.buffs.cryo, 1),
+          echo: round(player.buffs.echo, 1),
+          invert: round(player.buffs.invert, 1),
+          freeze: round(player.buffs.freeze, 1),
         },
+        cheat: player.cheat,
         stats: { ...player.stats },
         progress: round(this.#progressFor(player), 3),
       })),
