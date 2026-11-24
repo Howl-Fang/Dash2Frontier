@@ -107,6 +107,7 @@ const devCloseBtn = $('dev-close');
 const devEffectsEl = $('dev-effects');
 const devTargetBtns = Array.from(document.querySelectorAll('.dev-target'));
 
+const lockdownBadgeEl = $('lockdown-badge');
 const resultOverlay = $('result-overlay');
 const resultKicker = $('result-kicker');
 const resultTitle = $('result-title');
@@ -172,6 +173,7 @@ const state = {
   lockdownActive: false,
   examId: null,
   examAnswers: [],
+  submittedExamId: null,
   devOpen: false,
   devTarget: 'self',
   devPresses: [],
@@ -1419,6 +1421,7 @@ function updateHudEmpty() {
   timerEl.classList.remove('is-urgent');
   statusLine.textContent = 'READY THE DRILLS';
   countdownEl.classList.add('hidden');
+  if (lockdownBadgeEl) lockdownBadgeEl.classList.add('hidden');
 }
 
 const STATUS_CHIP_ORDER = [
@@ -1522,6 +1525,7 @@ function hideExam() {
   if (examOverlay) examOverlay.classList.add('hidden');
   state.examId = null;
   state.examAnswers = [];
+  state.submittedExamId = null;
 }
 
 function renderExam(exam) {
@@ -1564,6 +1568,11 @@ function updateExamUi(snapshot) {
     hideExam();
     return;
   }
+  if (exam.id === state.submittedExamId) {
+    // Waiting for the server to clear the exam; do not flash it back open.
+    if (examOverlay) examOverlay.classList.add('hidden');
+    return;
+  }
   if (state.examId !== exam.id) renderExam(exam);
   examTimerEl.textContent = `${(exam.remainingMs / 1000).toFixed(1)}s`;
 }
@@ -1572,8 +1581,11 @@ async function submitExamAnswers() {
   if (!state.examId) return;
   if (!state.examAnswers.every((answer) => answer >= 0)) return;
   const answers = state.examAnswers.slice();
+  const examId = state.examId;
+  state.submittedExamId = examId;
   const result = await emitAck('game:examAnswer', { answers }, 3000);
   if (!result.ok) {
+    state.submittedExamId = null;
     addToast(result.message || 'Could not submit the exam.', 'danger', 2200);
     return;
   }
@@ -1616,6 +1628,14 @@ function updateHud(snapshot) {
     'is-urgent',
     snapshot.phase === 'playing' && snapshot.timeLeftMs <= 10_000,
   );
+
+  const lockdownMs = snapshot.lockdownMs || 0;
+  if (lockdownBadgeEl) {
+    lockdownBadgeEl.classList.toggle('hidden', lockdownMs <= 0);
+    if (lockdownMs > 0) {
+      lockdownBadgeEl.textContent = `GATES SEALED · ${(lockdownMs / 1000).toFixed(1)}s`;
+    }
+  }
 
   updateStatusLine(snapshot);
   updateOfflineBanner();

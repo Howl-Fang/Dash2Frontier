@@ -671,7 +671,11 @@ export class Game {
 
     if (player.luckCharges > 0) {
       player.luckCharges -= 1;
-      effectId = pickFromPool(LUCKY_BUFF_POOL, this.random());
+      // Luck itself is excluded, so a guaranteed buff cannot loop forever.
+      effectId = pickFromPool(
+        LUCKY_BUFF_POOL.filter((id) => id !== 'luck'),
+        this.random(),
+      );
       target = player;
     } else if (player.buffs.misfortune > 0) {
       effectId = pickFromPool(LUCKY_DEBUFF_POOL, this.random());
