@@ -130,9 +130,11 @@ function sealNonGoalBaselines(cells, config) {
 }
 
 /**
- * Scatter lucky blocks through the top and bottom stretches of the map. They
- * only replace diggable rock, never bedrock or an already-open cell, and every
- * placement is mirrored 180° so both miners get the same gambles.
+ * Scatter lucky blocks through the top and bottom stretches of the map. Blocks
+ * come in contiguous clusters of 1–3 cells: bigger clusters take longer to dig
+ * but fire several outcomes at once. They only replace diggable rock, never
+ * bedrock or an already-open cell, and every placement is mirrored 180° so both
+ * miners get the same gambles.
  */
 function addLuckyBlocks(cells, cols, rows, random, mapConfig) {
   const bands = mapConfig.luckyBands || CONFIG.map.luckyBands;
@@ -147,26 +149,106 @@ function addLuckyBlocks(cells, cols, rows, random, mapConfig) {
   let placedCount = 0;
   let attempts = 0;
 
-  while (placedCount < count && attempts < count * 40) {
+  const pickSize = () => {
+    const roll = random();
+    if (roll < 0.55) return 1;
+    if (roll < 0.85) return 2;
+    return 3;
+  };
+
+  while (placedCount < count && attempts < count * 60) {
     attempts += 1;
     const band = bands[Math.floor(random() * bands.length)];
-    const row = Math.min(rows - 1, Math.max(0, randomInt(random, band[0], band[1])));
-    const col = randomInt(random, minCol, maxCol);
-    const index = cellIndex(col, row, cols);
-    if (placed.has(index)) continue;
-    const block = cells[index];
-    if (block === BLOCK.EMPTY || block === BLOCK.BEDROCK || block === BLOCK.LUCKY) continue;
+    const size = pickSize();
+    const horizontal = random() < 0.5;
+    const rowLimit = horizontal ? band[1] : band[1] - (size - 1);
+    const colLimit = horizontal ? maxCol - (size - 1) : maxCol;
+    if (rowLimit < band[0] || colLimit < minCol) continue;
+    const startRow = randomInt(random, band[0], rowLimit);
+    const startCol = randomInt(random, minCol, colLimit);
 
-    const mirrorCol = cols - 1 - col;
-    const mirrorRow = rows - 1 - row;
-    const mirrorIndex = cellIndex(mirrorCol, mirrorRow, cols);
+    const cluster = [];
+    const mirrored = [];
+    let valid = true;
+    for (let i = 0; i < size; i += 1) {
+      const col = horizontal ? startCol + i : startCol;
+      const row = horizontal ? startRow : startRow + i;
+      const index = cellIndex(col, row, cols);
+      const mirrorIndex = cellIndex(cols - 1 - col, rows - 1 - row, cols);
+      const block = cells[index];
+      if (block === BLOCK.EMPTY || block === BLOCK.BEDROCK || block === BLOCK.LUCKY) {
+        valid = false;
+        break;
+      }
+      if (placed.has(index) || placed.has(mirrorIndex)) {
+        valid = false;
+        break;
+      }
+      cluster.push(index);
+      mirrored.push(mirrorIndex);
+    }
+    if (!valid) continue;
 
-    cells[index] = BLOCK.LUCKY;
-    cells[mirrorIndex] = BLOCK.LUCKY;
-    placed.add(index);
-    placed.add(mirrorIndex);
+    for (const index of cluster) cells[index] = BLOCK.LUCKY;
+    for (const index of mirrored) cells[index] = BLOCK.LUCKY;
+    for (const index of [...cluster, ...mirrored]) placed.add(index);
     placedCount += 1;
   }
+}
+
+/**
+ * A centrepiece pattern stitched into the final map. It runs after everything
+ * else and rewrites every non-bedrock cell it covers, so a pattern can delete
+ * lucky blocks or open shortcuts; the generator re-validates the route after
+ * applying it. Exactly one pattern is chosen per map.
+ */
+function applyCenterPattern(cells, cols, rows, random) {
+  const cx = (cols - 1) / 2;
+  const cy = (rows - 1) / 2;
+  const roll = random();
+  const pattern = roll < 0.34 ? 'taiji' : roll < 0.67 ? 'rings' : 'space';
+
+  if (pattern === 'space') {
+    // A six-column vertical void through the middle of the seam.
+    const low = Math.floor(cx) - 2;
+    for (let col = low; col < low + 6; col += 1) {
+      for (let row = 0; row < rows; row += 1) {
+        const index = cellIndex(col, row, cols);
+        if (cells[index] !== BLOCK.BEDROCK) cells[index] = BLOCK.EMPTY;
+      }
+    }
+    return pattern;
+  }
+
+  for (let col = 0; col < cols; col += 1) {
+    for (let row = 0; row < rows; row += 1) {
+      const index = cellIndex(col, row, cols);
+      if (cells[index] === BLOCK.BEDROCK) continue;
+      const dx = col - cx;
+      const dy = row - cy;
+
+      if (pattern === 'taiji') {
+        const radius = 4.9;
+        if (Math.hypot(dx, dy) > radius) continue;
+        // Two eyes sit on the vertical axis, so the poles read top-to-bottom
+        // and the whole figure is 180° rotationally symmetric.
+        const inTopEye = Math.hypot(dx, dy + radius / 2) <= radius / 2;
+        const inBottomEye = Math.hypot(dx, dy - radius / 2) <= radius / 2;
+        let granite;
+        if (inTopEye) granite = true;
+        else if (inBottomEye) granite = false;
+        else granite = dx >= 0;
+        cells[index] = granite ? BLOCK.GRANITE : BLOCK.SOIL;
+      } else {
+        // Eight concentric rings alternating soil and obsidian.
+        const distance = Math.hypot(dx, dy);
+        const ring = Math.round(distance);
+        if (ring < 1 || ring > 8) continue;
+        cells[index] = ring % 2 === 0 ? BLOCK.SOIL : BLOCK.OBSIDIAN;
+      }
+    }
+  }
+  return pattern;
 }
 
 function canPass(block) {
@@ -353,7 +435,8 @@ function buildRawMap(cols, rows, random, config) {
   carveGoalAlcoves(cells, config);
   sealNonGoalBaselines(cells, config);
   addLuckyBlocks(cells, cols, rows, random, mapConfig);
-  return { cols, rows, cells };
+  const pattern = applyCenterPattern(cells, cols, rows, random);
+  return { cols, rows, cells, pattern };
 }
 
 function analysisFor(map, config, playerIndex) {
@@ -428,6 +511,8 @@ export function generateMap({ seed = randomSeed(), config = CONFIG } = {}) {
 
   for (let attempt = 1; attempt <= mapConfig.maxAttempts; attempt += 1) {
     const map = buildRawMap(resolved.cols, resolved.rows, random, resolved);
+    // The centrepiece pattern is applied before validation, so a shortcut or a
+    // granite plug can never slip through unchecked.
     const p1 = analysisFor(map, resolved, 0);
     const p2 = analysisFor(map, resolved, 1);
     const playable =
@@ -455,17 +540,9 @@ export function generateMap({ seed = randomSeed(), config = CONFIG } = {}) {
     }
   }
 
-  if (best) {
-    return {
-      ...best,
-      pathSeconds: best.p1.pathSeconds,
-      pathSecondsP2: best.p2.pathSeconds,
-      pathCells: best.p1.pathCells,
-      detourExtraCells: best.p1.detourExtraCells,
-      gates: best.p1.gates,
-    };
-  }
-
+  // No random attempt satisfied the route band. Fall back to the carved cross
+  // tunnels, which are guaranteed to connect both spawns to both gates; a
+  // pattern is still applied but its shortcuts cannot break connectivity.
   const map = buildFallbackMap(resolved);
   const p1 = analysisFor(map, resolved, 0);
   const p2 = analysisFor(map, resolved, 1);
@@ -479,19 +556,29 @@ export function generateMap({ seed = randomSeed(), config = CONFIG } = {}) {
     detourExtraCells: p1.detourExtraCells,
     gates: p1.gates,
     fallback: true,
+    bestAttempt: best ? best.attempts : null,
+    bestScore,
   };
 }
 
-export function isSymmetric(map) {
+/**
+ * Strict 180° symmetry, with one documented exception: the Taiji centrepiece
+ * swaps soil and granite under rotation (its poles are top/bottom). Callers pass
+ * `allowTaijiSwap` for maps whose `pattern` is `taiji`.
+ */
+export function isSymmetric(map, { allowTaijiSwap = false } = {}) {
   const { cols, rows, cells } = map;
+  const swap = new Set([
+    `${BLOCK.SOIL},${BLOCK.GRANITE}`,
+    `${BLOCK.GRANITE},${BLOCK.SOIL}`,
+  ]);
   for (let col = 0; col < cols; col += 1) {
     for (let row = 0; row < rows; row += 1) {
-      if (
-        cells[cellIndex(col, row, cols)] !==
-        cells[cellIndex(cols - 1 - col, rows - 1 - row, cols)]
-      ) {
-        return false;
-      }
+      const a = cells[cellIndex(col, row, cols)];
+      const b = cells[cellIndex(cols - 1 - col, rows - 1 - row, cols)];
+      if (a === b) continue;
+      if (allowTaijiSwap && swap.has(`${a},${b}`)) continue;
+      return false;
     }
   }
   return true;

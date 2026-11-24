@@ -10,6 +10,7 @@ export const BLOCK = Object.freeze({
   BEDROCK: 4,
   BARRICADE: 5,
   LUCKY: 6,
+  ICE: 7,
 });
 
 // Indexed by block id. `hardness` is used by the renderer for texture detail.
@@ -71,12 +72,22 @@ export const BLOCK_TYPES = Object.freeze([
   {
     id: BLOCK.LUCKY,
     name: 'Lucky Block',
-    // Deliberately very quick: the gamble is the effect, not the dig time.
+    // Clusters scale this by their cell count: 1 cell 0.3 s, 3 cells 0.9 s.
     mineTime: 0.3,
     color: '#3d2a63',
     edge: '#1b1233',
     accent: '#ffd76a',
     hardness: 0,
+  },
+  {
+    // Frostbite ice: as tough as obsidian, made by the empowered Cryo.
+    id: BLOCK.ICE,
+    name: 'Hard Ice',
+    mineTime: 4.0,
+    color: '#2d6c86',
+    edge: '#123a4a',
+    accent: '#a9ecff',
+    hardness: 3,
   },
 ]);
 
@@ -92,11 +103,12 @@ export const SKILLS = Object.freeze({
     name: 'Build',
     key: 'Q',
     cost: 35,
-    cooldown: 16,
+    cooldown: 10,
     target: 'rival',
     range: 9,
     maxCells: 3,
-    blurb: 'Drag to place up to 3 barricades near the rival.',
+    megaWidth: 3,
+    blurb: 'Drag to place up to 3 barricades near the rival. Overwrites rock.',
     icon: 'build',
   },
   blast: {
@@ -108,6 +120,7 @@ export const SKILLS = Object.freeze({
     target: 'self',
     range: 10,
     radius: 1,
+    megaRadius: 3,
     blurb: 'Blow a 3×3 hole within 10 cells of yourself.',
     icon: 'blast',
   },
@@ -121,6 +134,7 @@ export const SKILLS = Object.freeze({
     duration: 5,
     mineMultiplier: 1.8,
     moveMultiplier: 1.25,
+    hyperMultiplier: 5,
     blurb: '5s: ×1.8 drill speed and ×1.25 movement.',
     icon: 'overdrive',
   },
@@ -137,6 +151,7 @@ export const SKILLS = Object.freeze({
     duration: 4,
     mineMultiplier: 0.45,
     moveMultiplier: 0.6,
+    frostbiteRadius: 2,
     blurb: 'A delayed frost burst near the rival. Chills for 4s.',
     icon: 'cryo',
   },
@@ -168,6 +183,14 @@ export const EFFECTS = Object.freeze({
     kind: 'buff',
     charges: 2,
     description: 'The next 2 lucky blocks you mine are guaranteed buffs.',
+  },
+  apotheosis: {
+    id: 'apotheosis',
+    name: 'Apotheosis',
+    kind: 'buff',
+    charges: 1,
+    description:
+      'Your next skill is empowered: MegaBuild, HyperDrive, Frostbite or GigaBlast.',
   },
   invert: {
     id: 'invert',
@@ -202,8 +225,12 @@ export const EFFECTS = Object.freeze({
     name: 'Freeze',
     kind: 'debuff',
     duration: 6,
-    taps: 8,
-    description: 'Frozen in place. Mash direction keys 8 times to thaw.',
+    // QTE meter: each tap adds progress, progress decays constantly so the
+    // player has to mash instead of tapping eight times slowly.
+    startProgress: 0.12,
+    tapGain: 0.16,
+    decayPerSecond: 0.3,
+    description: 'Frozen in place. Mash direction keys to fill the thaw ring.',
   },
   misfortune: {
     id: 'misfortune',
@@ -215,9 +242,9 @@ export const EFFECTS = Object.freeze({
   lockdown: {
     id: 'lockdown',
     name: 'Lockdown',
-    kind: 'debuff',
+    kind: 'tradeoff',
     duration: 8,
-    description: 'Both target gates are sealed for 8s.',
+    description: 'Both target gates are sealed for 8s — for everyone.',
   },
   hijack: {
     id: 'hijack',
@@ -237,10 +264,10 @@ export const EFFECTS = Object.freeze({
     id: 'balance',
     name: 'Balance',
     kind: 'tradeoff',
-    duration: 20,
+    duration: 5,
     behindMultiplier: 3,
     aheadDivisor: 3,
-    description: 'Behind on progress: drill ×3, ahead: ÷3, for 20s.',
+    description: 'Behind on progress: drill ×3, ahead: ÷3, for 5s.',
   },
   mundane: {
     id: 'mundane',
@@ -281,64 +308,87 @@ export const STATUS_DEFS = Object.freeze({
   overdrive: {
     id: 'overdrive',
     name: 'Overdrive',
+    short: 'BOOST',
     kind: 'buff',
     description: 'Drill ×1.8 and movement ×1.25.',
   },
-  echo: { id: 'echo', name: 'Echo Form', kind: 'buff' },
-  reject: { id: 'reject', name: 'Reject', kind: 'buff' },
+  echo: { id: 'echo', name: 'Echo Form', short: 'ECHO', kind: 'buff' },
+  reject: { id: 'reject', name: 'Reject', short: 'WARD', kind: 'buff' },
   luck: {
     id: 'luck',
     name: 'Luck',
+    short: 'LUCK',
     kind: 'buff',
     description: 'The next lucky blocks you mine are guaranteed buffs.',
+  },
+  apotheosis: {
+    id: 'apotheosis',
+    name: 'Apotheosis',
+    short: 'APO',
+    kind: 'buff',
+    description: 'Your next skill cast is empowered.',
+  },
+  hyper: {
+    id: 'hyper',
+    name: 'HyperDrive',
+    short: 'HYPER',
+    kind: 'buff',
+    description: 'HyperDrive: drill and movement ×5.',
   },
   examPass: {
     id: 'examPass',
     name: 'Exam Passed',
+    short: 'PASS',
     kind: 'buff',
     description: 'Drill ×2 after passing the exam.',
   },
   cryo: {
     id: 'cryo',
     name: 'Chilled',
+    short: 'CHILL',
     kind: 'debuff',
     description: 'Cryo slow: drill ×0.45 and movement ×0.6.',
   },
-  invert: { id: 'invert', name: 'Invert', kind: 'debuff' },
-  fog: { id: 'fog', name: 'Fog', kind: 'debuff' },
-  lag: { id: 'lag', name: 'Lag', kind: 'debuff' },
+  invert: { id: 'invert', name: 'Invert', short: 'FLIP', kind: 'debuff' },
+  fog: { id: 'fog', name: 'Fog', short: 'FOG', kind: 'debuff' },
+  lag: { id: 'lag', name: 'Lag', short: 'LAG', kind: 'debuff' },
   qte: {
     id: 'qte',
     name: 'Frozen',
+    short: 'ICE',
     kind: 'debuff',
     description: 'Cannot move or drill. Mash direction keys to break free.',
   },
   misfortune: {
     id: 'misfortune',
     name: 'Misfortune',
+    short: 'DOOM',
     kind: 'debuff',
   },
   examFail: {
     id: 'examFail',
     name: 'Exam Failed',
+    short: 'FAIL',
     kind: 'debuff',
     description: 'Drill ×0.5 after failing the exam.',
   },
   freeze: {
     id: 'freeze',
     name: 'Hard Frozen',
+    short: 'LOCK',
     kind: 'debuff',
     description: 'Cheat-mode freeze: cannot move or drill.',
   },
-  hijack: { id: 'hijack', name: 'Hijack', kind: 'tradeoff' },
+  hijack: { id: 'hijack', name: 'Hijack', short: 'STEER', kind: 'tradeoff' },
   exam: {
     id: 'exam',
     name: 'Exam',
+    short: 'EXAM',
     kind: 'tradeoff',
     description: 'Answer 3 sums before the timer runs out.',
   },
-  balance: { id: 'balance', name: 'Balance', kind: 'tradeoff' },
-  mundane: { id: 'mundane', name: 'Mundane', kind: 'tradeoff' },
+  balance: { id: 'balance', name: 'Balance', short: 'RISK', kind: 'tradeoff' },
+  mundane: { id: 'mundane', name: 'Mundane', short: 'NULL', kind: 'tradeoff' },
 });
 
 // Weighted roll table. Weights are tuned so buffs, debuffs, tradeoffs and
@@ -347,6 +397,7 @@ export const LUCKY_ROLL_TABLE = Object.freeze([
   { effect: 'echo', weight: 16 },
   { effect: 'reject', weight: 7 },
   { effect: 'luck', weight: 10 },
+  { effect: 'apotheosis', weight: 8 },
   { effect: 'invert', weight: 8 },
   { effect: 'fog', weight: 10 },
   { effect: 'drain', weight: 8 },
@@ -359,11 +410,11 @@ export const LUCKY_ROLL_TABLE = Object.freeze([
   { effect: 'balance', weight: 7 },
   { effect: 'mundane', weight: 5 },
   { effect: 'soften', weight: 10 },
-  { effect: 'wall', weight: 8 },
+  { effect: 'wall', weight: 9 },
   { effect: 'harden', weight: 10 },
 ]);
 
-export const LUCKY_BUFF_POOL = Object.freeze(['echo', 'reject', 'luck']);
+export const LUCKY_BUFF_POOL = Object.freeze(['echo', 'reject', 'luck', 'apotheosis']);
 export const LUCKY_DEBUFF_POOL = Object.freeze([
   'invert',
   'fog',
@@ -371,7 +422,6 @@ export const LUCKY_DEBUFF_POOL = Object.freeze([
   'lag',
   'freeze',
   'misfortune',
-  'lockdown',
 ]);
 
 const LUCKY_ROLL_TOTAL = LUCKY_ROLL_TABLE.reduce((sum, entry) => sum + entry.weight, 0);
@@ -453,8 +503,9 @@ export const CONFIG = Object.freeze({
     clusterCount: 9,
     clusterMin: 3,
     clusterMax: 8,
-    // Lucky blocks are seeded in the top and bottom stretches of the map.
-    luckyCount: 20,
+    // Lucky blocks are seeded in the top and bottom stretches of the map, in
+    // clusters of 1–3 cells.
+    luckyCount: 28,
     luckyBands: Object.freeze([
       Object.freeze([1, 6]),
       Object.freeze([21, 26]),
@@ -462,7 +513,9 @@ export const CONFIG = Object.freeze({
     minPathSeconds: 140,
     maxPathSeconds: 210,
     minDetourExtraCells: 3,
-    maxAttempts: 60,
+    // The centre pattern can open shortcuts or plug routes, so generation
+    // retries until a validated route exists before using the fallback.
+    maxAttempts: 200,
   }),
 });
 

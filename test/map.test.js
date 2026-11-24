@@ -17,7 +17,11 @@ test('generated maps are 180-degree rotationally symmetric', () => {
     const map = generateMap({ seed });
     assert.equal(map.cols, CONFIG.cols);
     assert.equal(map.rows, CONFIG.rows);
-    assert.equal(isSymmetric(map), true, `seed ${seed} should be symmetric`);
+    assert.equal(
+      isSymmetric(map, { allowTaijiSwap: map.pattern === 'taiji' }),
+      true,
+      `seed ${seed} should be symmetric`,
+    );
   }
 });
 
@@ -169,18 +173,62 @@ test('lucky blocks spawn only in the top and bottom stretches and stay symmetric
       }
     }
     assert.ok(lucky.length > 0, `seed ${seed} should seed lucky blocks`);
-    assert.equal(
-      lucky.length,
-      CONFIG.map.luckyCount * 2,
-      `seed ${seed} should have every lucky pair placed`,
+    // Clusters of 1–3 cells are mirrored, and the centre pattern may delete a
+    // few, so assert a healthy population rather than an exact cell count.
+    assert.ok(
+      lucky.length >= CONFIG.map.luckyCount,
+      `seed ${seed} should keep a dense lucky population, got ${lucky.length}`,
     );
-    assert.equal(lucky.length % 2, 0, 'lucky blocks are mirrored in pairs');
     for (const [col, row] of lucky) {
       const inTop = row >= 1 && row <= 6;
       const inBottom = row >= 21 && row <= 26;
       assert.ok(inTop || inBottom, `seed ${seed} lucky block at (${col}, ${row}) is off the top/bottom bands`);
       assert.ok(col >= 2 && col <= map.cols - 3, `seed ${seed} lucky block sits on a gate column`);
+      const mirror = map.cells[cellIndex(map.cols - 1 - col, map.rows - 1 - row, map.cols)];
+      assert.equal(mirror, BLOCK.LUCKY, `seed ${seed} lucky block at (${col}, ${row}) is not mirrored`);
     }
-    assert.equal(isSymmetric(map), true);
+    assert.equal(isSymmetric(map, { allowTaijiSwap: map.pattern === 'taiji' }), true);
   }
+});
+
+test('lucky blocks form multi-cell clusters and a centre pattern is applied', () => {
+  const patterns = new Set();
+  let biggestCluster = 1;
+  for (const seed of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]) {
+    const map = generateMap({ seed });
+    patterns.add(map.pattern);
+    const seen = new Set();
+    for (let col = 0; col < map.cols; col += 1) {
+      for (let row = 0; row < map.rows; row += 1) {
+        const index = cellIndex(col, row, map.cols);
+        if (map.cells[index] !== BLOCK.LUCKY || seen.has(index)) continue;
+        const stack = [index];
+        seen.add(index);
+        let size = 0;
+        while (stack.length > 0) {
+          const current = stack.pop();
+          size += 1;
+          const c = current % map.cols;
+          const r = Math.floor(current / map.cols);
+          for (const [dc, dr] of [
+            [1, 0],
+            [-1, 0],
+            [0, 1],
+            [0, -1],
+          ]) {
+            const nc = c + dc;
+            const nr = r + dr;
+            if (nc < 0 || nc >= map.cols || nr < 0 || nr >= map.rows) continue;
+            const next = cellIndex(nc, nr, map.cols);
+            if (map.cells[next] !== BLOCK.LUCKY || seen.has(next)) continue;
+            seen.add(next);
+            stack.push(next);
+          }
+        }
+        biggestCluster = Math.max(biggestCluster, size);
+      }
+    }
+  }
+  assert.ok(biggestCluster >= 2, 'at least some lucky blocks should be multi-cell');
+  assert.ok(patterns.size >= 2, `expected varied centre patterns, saw ${[...patterns]}`);
 });
