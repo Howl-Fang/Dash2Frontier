@@ -74,9 +74,9 @@ export const BLOCK_TYPES = Object.freeze([
     name: 'Lucky Block',
     // Clusters scale this by their cell count: 1 cell 0.3 s, 3 cells 0.9 s.
     mineTime: 0.3,
-    color: '#3d2a63',
-    edge: '#1b1233',
-    accent: '#ffd76a',
+    color: '#f2c230',
+    edge: '#8a5a08',
+    accent: '#fff6ce',
     hardness: 0,
   },
   {

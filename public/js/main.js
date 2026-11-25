@@ -328,6 +328,47 @@ function notifyPlayer(index, text, tone = 'info') {
   renderer.addPlayerText(index, text, tone);
 }
 
+/**
+ * Lucky-block reveals get their own centre-top card: the icon, the effect name
+ * and where it landed, so the digger never has to guess what they rolled.
+ */
+function addLuckyNote(event) {
+  if (!fieldLogEl || !event) return;
+  const def = EFFECTS[event.effect] || {};
+  const target = Number.isInteger(event.target) ? event.target : event.player;
+  const kind = event.kind || def.kind || 'terrain';
+  const tone =
+    kind === 'buff' ? 'buff' : kind === 'debuff' ? 'debuff' : kind === 'tradeoff' ? 'tradeoff' : 'cyan';
+  const node = document.createElement('div');
+  node.className = `field-note is-lucky is-${tone}`;
+  const icon = document.createElement('span');
+  icon.className = 'lucky-note-icon';
+  icon.innerHTML = effectIconSvg(event.effect);
+  const body = document.createElement('span');
+  body.className = 'lucky-note-body';
+  const kicker = document.createElement('span');
+  kicker.className = 'lucky-note-kicker';
+  kicker.textContent = 'Lucky block';
+  const name = document.createElement('strong');
+  name.className = 'lucky-note-name';
+  name.textContent = `${(def.name || event.effect || 'Effect').toUpperCase()}${event.blocked ? ' · RESISTED' : ''}`;
+  const meta = document.createElement('span');
+  meta.className = 'lucky-note-meta';
+  const parts = [kind.toUpperCase()];
+  if (event.duration) parts.push(`${event.duration}s`);
+  if (event.charges) parts.push(`${event.charges}×`);
+  if (kind !== 'terrain') parts.push(target === state.you ? 'YOU' : 'RIVAL');
+  meta.textContent = parts.join(' · ');
+  body.append(kicker, name, meta);
+  node.append(icon, body);
+  fieldLogEl.append(node);
+  while (fieldLogEl.children.length > 3) fieldLogEl.firstElementChild.remove();
+  window.setTimeout(() => {
+    node.classList.add('is-out');
+    window.setTimeout(() => node.remove(), 280);
+  }, 2600);
+}
+
 /* ── Hidden cheat mode (triple-tap C) ───────────────────────────────── */
 
 const CHEAT_TRIPLE_WINDOW_MS = 700;
@@ -1274,6 +1315,10 @@ function onFx(payload) {
         break;
       case 'effect': {
         const target = Number.isInteger(event.target) ? event.target : event.player;
+        // Lucky-block rolls carry the dug cell; dev-menu effects do not.
+        if (event.col !== null && event.col !== undefined && event.player === state.you) {
+          addLuckyNote(event);
+        }
         const tone =
           event.kind === 'buff'
             ? 'buff'

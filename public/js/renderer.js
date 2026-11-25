@@ -81,7 +81,6 @@ export class GameRenderer {
     this.mapCanvas = document.createElement('canvas');
     this.mapCtx = this.mapCanvas.getContext('2d');
     this.barricadeCells = new Set();
-    this.luckyCells = new Set();
     this.targeting = null;
 
     this.viewPositions = this.#startViews();
@@ -132,10 +131,8 @@ export class GameRenderer {
     this.fogActive = false;
     this.fogBlend = 0;
     this.barricadeCells.clear();
-    this.luckyCells.clear();
     for (let i = 0; i < this.cells.length; i += 1) {
       if (this.cells[i] === BLOCK.BARRICADE) this.barricadeCells.add(i);
-      if (this.cells[i] === BLOCK.LUCKY) this.luckyCells.add(i);
     }
     this.targeting = null;
     this.viewPositions = this.#startViews();
@@ -193,17 +190,11 @@ export class GameRenderer {
       if (block === BLOCK.EMPTY && old !== BLOCK.EMPTY) {
         this.spawnBlockBurst(col, row, old);
         this.barricadeCells.delete(index);
-        this.luckyCells.delete(index);
       } else if (block === BLOCK.BARRICADE) {
         this.spawnBarricadeDust(col, row);
         this.barricadeCells.add(index);
-        this.luckyCells.delete(index);
-      } else if (block === BLOCK.LUCKY) {
-        this.luckyCells.add(index);
-        this.barricadeCells.delete(index);
       } else {
         this.barricadeCells.delete(index);
-        this.luckyCells.delete(index);
       }
     }
     if (touched.length > 0) this.redrawCells(touched);
@@ -372,6 +363,34 @@ export class GameRenderer {
     ctx.fillRect(bx, by, Math.max(1, Math.round(tile * 0.06)), bh);
     ctx.fillRect(bx, by, bw, Math.max(1, Math.round(tile * 0.06)));
 
+    // Classic Minecraft-style lucky block: gold face with a white question mark.
+    if (block === BLOCK.LUCKY) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(bx, by, bw, bh);
+      ctx.clip();
+      ctx.fillStyle = 'rgba(255, 236, 160, 0.38)';
+      ctx.fillRect(bx + bw * 0.12, by + bh * 0.12, bw * 0.76, bh * 0.5);
+      ctx.fillStyle = 'rgba(120, 74, 6, 0.32)';
+      ctx.fillRect(bx, by + bh * 0.62, bw, bh * 0.38);
+      ctx.strokeStyle = 'rgba(92, 58, 4, 0.85)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx + 1.5, by + 1.5, bw - 3, bh - 3);
+      if (tile >= 7) {
+        ctx.fillStyle = '#ffffff';
+        ctx.font = `900 ${Math.max(7, Math.round(tile * 0.72))}px ${FONT_MONO}`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.shadowColor = 'rgba(90, 55, 0, 0.9)';
+        ctx.shadowBlur = Math.max(1, tile * 0.1);
+        ctx.fillText('?', bx + bw / 2, by + bh / 2 + tile * 0.04);
+        ctx.shadowBlur = 0;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'alphabetic';
+      }
+      ctx.restore();
+    }
+
     if (tile >= 12) {
       if (block === BLOCK.SANDSTONE) {
         ctx.fillStyle = 'rgba(255, 230, 173, 0.13)';
@@ -445,40 +464,6 @@ export class GameRenderer {
           const px = bx + 2 + hash2(col + i * 3, row, this.seed + 51) * (bw - 5);
           const py = by + 2 + hash2(col, row + i * 5, this.seed + 53) * (bh - 5);
           ctx.fillRect(Math.round(px), Math.round(py), Math.max(1, Math.round(tile * 0.055)), Math.max(1, Math.round(tile * 0.055)));
-        }
-      } else if (block === BLOCK.LUCKY) {
-        const glow = ctx.createRadialGradient(
-          bx + bw / 2,
-          by + bh / 2,
-          0,
-          bx + bw / 2,
-          by + bh / 2,
-          bw * 0.62,
-        );
-        glow.addColorStop(0, 'rgba(255, 215, 106, 0.36)');
-        glow.addColorStop(1, 'rgba(255, 215, 106, 0)');
-        ctx.fillStyle = glow;
-        ctx.fillRect(bx, by, bw, bh);
-
-        ctx.strokeStyle = '#ffd76a';
-        ctx.lineWidth = Math.max(1, tile * 0.07);
-        ctx.strokeRect(bx + 1, by + 1, bw - 2, bh - 2);
-
-        ctx.fillStyle = 'rgba(255, 215, 106, 0.18)';
-        for (let i = 0; i < 2; i += 1) {
-          const px = bx + 3 + hash2(col + i * 7, row, this.seed + 61) * (bw - 8);
-          const py = by + 3 + hash2(col, row + i * 9, this.seed + 67) * (bh - 8);
-          ctx.fillRect(Math.round(px), Math.round(py), Math.max(1, Math.round(tile * 0.08)), Math.max(1, Math.round(tile * 0.08)));
-        }
-
-        if (tile >= 10) {
-          ctx.fillStyle = '#ffe9a8';
-          ctx.font = `700 ${Math.max(6, Math.round(tile * 0.6))}px ${FONT_MONO}`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText('?', bx + bw / 2, by + bh / 2 + 0.5);
-          ctx.textAlign = 'left';
-          ctx.textBaseline = 'alphabetic';
         }
       }
     }
@@ -953,7 +938,6 @@ export class GameRenderer {
 
     this.drawGates(ctx);
     this.drawBarricadePulse(ctx);
-    this.drawLuckyPulse(ctx);
     this.drawDigOverlays(ctx);
     this.drawCryoTelegraphs(ctx);
     this.drawTargeting(ctx);
@@ -1044,10 +1028,19 @@ export class GameRenderer {
         ctx.fillStyle = gradient;
         ctx.fillRect(x, y, w, h);
 
-        // Animated beacon spilling past the map edge, so the gate reads as the
-        // destination even at a glance.
+        // Glow spilling past the map edge plus chevrons marching into the gate.
+        // Only the target gate gets the strong treatment, so the objective is
+        // unmistakable from anywhere on the map.
+        const margin =
+          side === 'left'
+            ? this.offsetX
+            : this.stageW - (this.offsetX + this.mapW);
         const spill = Math.max(tile * 3.2, 42);
-        const reach = spill * (0.85 + 0.15 * Math.sin(this.time * 2.2 + index));
+        const reach = Math.max(tile * 1.6, Math.min(spill, Math.max(0, margin)));
+        const breath = 0.82 + 0.18 * Math.sin(this.time * 2.2 + index);
+        const strength = isTarget ? (0.42 + pulse * 0.24) * breath : 0.1;
+        const outsideX =
+          side === 'left' ? this.offsetX - reach : this.offsetX + this.mapW;
         ctx.save();
         const outward = ctx.createLinearGradient(
           side === 'left' ? this.offsetX - reach : this.offsetX + this.mapW + reach,
@@ -1055,39 +1048,33 @@ export class GameRenderer {
           side === 'left' ? this.offsetX : this.offsetX + this.mapW,
           0,
         );
-        const strength = isTarget ? 0.4 + pulse * 0.2 : 0.12;
         outward.addColorStop(0, `rgba(${team.rgb}, 0)`);
         outward.addColorStop(0.55, `rgba(${team.rgb}, ${strength * 0.45})`);
         outward.addColorStop(1, `rgba(${team.rgb}, ${strength})`);
         ctx.fillStyle = outward;
-        ctx.fillRect(
-          side === 'left' ? this.offsetX - reach : this.offsetX + this.mapW,
-          y,
-          reach,
-          h,
-        );
+        ctx.fillRect(outsideX, y, reach, h);
+
         if (isTarget) {
-          const beams = 2;
-          for (let i = 0; i < beams; i += 1) {
-            const t = (this.time * 0.45 + i * 0.5 + index * 0.25) % 1;
-            const beamY = y + h * (0.15 + 0.7 * ((t + i * 0.37) % 1));
-            const beamW = reach * (0.4 + t * 0.6);
-            const beam = ctx.createLinearGradient(
-              side === 'left' ? this.offsetX - beamW : this.offsetX + this.mapW + beamW,
-              0,
-              side === 'left' ? this.offsetX : this.offsetX + this.mapW,
-              0,
-            );
-            beam.addColorStop(0, `rgba(${team.rgb}, 0)`);
-            beam.addColorStop(1, `rgba(${team.rgb}, ${0.28 * (1 - t)})`);
-            ctx.fillStyle = beam;
-            ctx.fillRect(
-              side === 'left' ? this.offsetX - beamW : this.offsetX + this.mapW,
-              beamY,
-              beamW,
-              Math.max(1.2, tile * 0.08),
-            );
+          const direction = side === 'left' ? -1 : 1;
+          const centerX =
+            side === 'left'
+              ? this.offsetX - reach * 0.55
+              : this.offsetX + this.mapW + reach * 0.55;
+          const size = Math.max(5, Math.min(tile * 0.66, reach * 0.3));
+          ctx.strokeStyle = `rgba(${team.rgb}, ${0.5 + pulse * 0.35})`;
+          ctx.lineWidth = Math.max(1.4, tile * 0.1);
+          ctx.lineCap = 'round';
+          for (let i = 0; i < 3; i += 1) {
+            const phase = ((this.time * 0.7 + i / 3) % 1) - 0.5;
+            const arrowX = centerX + direction * phase * reach * 0.6;
+            const arrowY = y + h / 2;
+            ctx.beginPath();
+            ctx.moveTo(arrowX - direction * size, arrowY - size);
+            ctx.lineTo(arrowX + direction * size, arrowY);
+            ctx.lineTo(arrowX - direction * size, arrowY + size);
+            ctx.stroke();
           }
+          ctx.lineCap = 'butt';
         }
         ctx.restore();
 
@@ -1099,10 +1086,34 @@ export class GameRenderer {
         ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
         ctx.restore();
 
-        // Bright strip along the actual scoring edge.
-        const edgeX = side === 'left' ? this.offsetX : this.offsetX + this.mapW - 2;
-        ctx.fillStyle = `rgba(${team.rgb}, ${isTarget ? 0.5 + pulse * 0.32 : 0.22})`;
-        ctx.fillRect(edgeX, y, 2, h);
+        // Checkered finish line on the scoring edge, tinted with team colour.
+        const bandW = Math.max(3, Math.round(tile * 0.62));
+        const edgeX = side === 'left' ? this.offsetX : this.offsetX + this.mapW - bandW;
+        const checkSize = Math.max(3, Math.round(tile * 0.5));
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(edgeX, y, bandW, h);
+        ctx.clip();
+        for (let iy = 0; iy * checkSize < h; iy += 1) {
+          for (let ix = 0; ix * checkSize < bandW; ix += 1) {
+            ctx.fillStyle =
+              (ix + iy) % 2 === 0
+                ? 'rgba(246, 249, 252, 0.92)'
+                : 'rgba(10, 13, 18, 0.92)';
+            ctx.fillRect(
+              edgeX + ix * checkSize,
+              y + iy * checkSize,
+              checkSize,
+              checkSize,
+            );
+          }
+        }
+        ctx.fillStyle = `rgba(${team.rgb}, ${isTarget ? 0.26 + pulse * 0.2 : 0.1})`;
+        ctx.fillRect(edgeX, y, bandW, h);
+        ctx.restore();
+        ctx.strokeStyle = `rgba(${team.rgb}, ${isTarget ? 0.7 : 0.24})`;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(edgeX + 0.5, y + 0.5, bandW - 1, h - 1);
 
         const scanY = y + ((this.time * 28 + index * 37 + low * 11) % (h + 20)) - 10;
         if (scanY >= y && scanY <= y + h) {
@@ -1121,25 +1132,6 @@ export class GameRenderer {
             ? `rgba(${team.rgb}, 0.95)`
             : `rgba(${team.rgb}, 0.55)`;
           ctx.fillText(isTarget ? 'TARGET GATE' : 'GATE', 0, 0);
-          ctx.restore();
-        }
-
-        if (isTarget && tile >= 8) {
-          const direction = side === 'left' ? -1 : 1;
-          const arrowX = side === 'left' ? x + w * 0.32 : x + w * 0.68;
-          const arrowY = y + h / 2;
-          const size = tile * 0.24;
-          ctx.save();
-          ctx.strokeStyle = `rgba(${team.rgb}, ${0.45 + pulse * 0.4})`;
-          ctx.lineWidth = Math.max(1, tile * 0.07);
-          for (let i = 0; i < 2; i += 1) {
-            const offset = (i - 0.5) * tile * 0.7 + Math.sin(this.time * 3 + i) * 2;
-            ctx.beginPath();
-            ctx.moveTo(arrowX - direction * size + direction * offset, arrowY - size);
-            ctx.lineTo(arrowX + direction * size + direction * offset, arrowY);
-            ctx.lineTo(arrowX - direction * size + direction * offset, arrowY + size);
-            ctx.stroke();
-          }
           ctx.restore();
         }
 
@@ -1443,74 +1435,6 @@ export class GameRenderer {
       const x = this.offsetX + col * this.tile + 1;
       const y = this.offsetY + row * this.tile + 1;
       ctx.strokeRect(x, y, this.tile - 2, this.tile - 2);
-    }
-    ctx.restore();
-  }
-
-  /** Rainbow lucky blocks. Multi-cell clusters share one flowing hue field. */
-  drawLuckyPulse(ctx) {
-    if (!this.cells || this.luckyCells.size === 0) return;
-    const tile = this.tile;
-    const gap = tile >= 14 ? 1 : 0;
-    const cols = this.cols;
-    const rows = this.rows;
-    const isLucky = (col, row) =>
-      col >= 0 &&
-      col < cols &&
-      row >= 0 &&
-      row < rows &&
-      this.cells[row * cols + col] === BLOCK.LUCKY;
-
-    ctx.save();
-    for (const index of this.luckyCells) {
-      const col = index % cols;
-      const row = Math.floor(index / cols);
-      const x = this.offsetX + col * tile + gap;
-      const y = this.offsetY + row * tile + gap;
-      const size = tile - gap * 2;
-      const hue = (this.time * 90 + col * 24 + row * 19) % 360;
-
-      ctx.fillStyle = `hsl(${hue}, 92%, 56%)`;
-      ctx.fillRect(x, y, size, size);
-
-      // Moving diagonal sheen.
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(x, y, size, size);
-      ctx.clip();
-      const sweep = (this.time * 0.55 + col * 0.17 + row * 0.23) % 1;
-      ctx.translate(x - size + sweep * size * 2, y);
-      ctx.rotate(-0.55);
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.26)';
-      ctx.fillRect(0, -size, Math.max(2, size * 0.32), size * 3);
-      ctx.restore();
-
-      ctx.fillStyle = `hsla(${(hue + 40) % 360}, 100%, 78%, 0.85)`;
-      ctx.fillRect(x + 1, y + 1, size - 2, Math.max(1, size * 0.1));
-
-      // Only outline outward-facing edges so clusters read as one big block.
-      ctx.strokeStyle = `hsla(${(hue + 180) % 360}, 100%, 86%, 0.9)`;
-      ctx.lineWidth = Math.max(1, tile * 0.06);
-      const x0 = this.offsetX + col * tile;
-      const y0 = this.offsetY + row * tile;
-      ctx.beginPath();
-      if (!isLucky(col, row - 1)) {
-        ctx.moveTo(x0, y0 + 1);
-        ctx.lineTo(x0 + tile, y0 + 1);
-      }
-      if (!isLucky(col, row + 1)) {
-        ctx.moveTo(x0, y0 + tile - 1);
-        ctx.lineTo(x0 + tile, y0 + tile - 1);
-      }
-      if (!isLucky(col - 1, row)) {
-        ctx.moveTo(x0 + 1, y0);
-        ctx.lineTo(x0 + 1, y0 + tile);
-      }
-      if (!isLucky(col + 1, row)) {
-        ctx.moveTo(x0 + tile - 1, y0);
-        ctx.lineTo(x0 + tile - 1, y0 + tile);
-      }
-      ctx.stroke();
     }
     ctx.restore();
   }
