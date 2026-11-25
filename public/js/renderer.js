@@ -731,8 +731,14 @@ export class GameRenderer {
     const dt = Math.min(0.05, Math.max(0, (now - this.lastFrame) / 1000));
     this.lastFrame = now;
     this.time += dt;
-    this.update(dt);
-    this.draw();
+    // A single bad draw call must not kill the animation loop and freeze the
+    // whole board, so the frame is isolated and the loop always reschedules.
+    try {
+      this.update(dt);
+      this.draw();
+    } catch (error) {
+      console.error('Render frame failed', error);
+    }
     this.raf = requestAnimationFrame((next) => this.frame(next));
   }
 
@@ -1073,7 +1079,7 @@ export class GameRenderer {
               0,
             );
             beam.addColorStop(0, `rgba(${team.rgb}, 0)`);
-            beam.addColorStop(1, `rgba(${team.bright}, ${0.28 * (1 - t)})`);
+            beam.addColorStop(1, `rgba(${team.rgb}, ${0.28 * (1 - t)})`);
             ctx.fillStyle = beam;
             ctx.fillRect(
               side === 'left' ? this.offsetX - beamW : this.offsetX + this.mapW,
